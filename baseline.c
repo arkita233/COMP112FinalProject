@@ -11,9 +11,6 @@
 #include <time.h>
 #include <stdbool.h>
 #include <fcntl.h>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <pthread.h>
 
 #define ISVALIDSOCKET(s) ((s) >= 0)
 #define CLOSESOCKET(s) close(s)
@@ -48,18 +45,6 @@ void send_408(struct client_info **client_list,struct client_info *client);
 void send_500(struct client_info **client_list,struct client_info *client);
 void send_503(struct client_info **client_list,struct client_info *client);
 
-pthread_mutex_t mutex;
-
-//==============================================
-typedef struct thrArgs
-{
-    struct client_info **client_list;
-    struct client_info *client;
-    const char *path;
-
-}Param;
-//==============================================
-
 SOCKET create_socket(const char* host, const char *port) {
     printf("Configuring local address...\n");
     struct addrinfo hints;
@@ -74,11 +59,11 @@ SOCKET create_socket(const char* host, const char *port) {
     printf("Creating socket...\n");
     SOCKET socket_listen;
     socket_listen = socket(bind_address->ai_family,
-            bind_address->ai_socktype, bind_address->ai_protocol);
-    
+                           bind_address->ai_socktype, bind_address->ai_protocol);
+
     int optval = 1;
-    setsockopt(socket_listen, SOL_SOCKET, SO_REUSEADDR, 
-	     (const void *)&optval , sizeof(int));
+    setsockopt(socket_listen, SOL_SOCKET, SO_REUSEADDR,
+               (const void *)&optval , sizeof(int));
 
     if (!ISVALIDSOCKET(socket_listen)) {
         fprintf(stderr, "socket() failed. (%d)\n", GETSOCKETERRNO());
@@ -87,7 +72,7 @@ SOCKET create_socket(const char* host, const char *port) {
 
     printf("Binding socket to local address...\n");
     if (bind(socket_listen,
-                bind_address->ai_addr, bind_address->ai_addrlen)) {
+             bind_address->ai_addr, bind_address->ai_addrlen)) {
         fprintf(stderr, "bind() failed. (%d)\n", GETSOCKETERRNO());
         exit(1);
     }
@@ -105,10 +90,10 @@ SOCKET create_socket(const char* host, const char *port) {
 /*store content for different url and port*/
 typedef struct Input
 {
-	char url[256];
+    char url[256];
     int port;
-	char object[MAX_SIZE];
-	int maxAge;
+    char object[MAX_SIZE];
+    int maxAge;
     long now;
     int length;
 } Input;
@@ -117,34 +102,34 @@ typedef struct Input
 typedef struct QNode
 {
     struct QNode *prev, *next;
-    Input* input;  
+    Input* input;
 } QNode;
 
 /*FIFO*/
 typedef struct Queue
 {
-    unsigned count;  
-    unsigned numberOfFrames; 
+    unsigned count;
+    unsigned numberOfFrames;
     QNode *front, *rear;
 } Queue;
 
 /*make handle element in queue easier*/
 typedef struct Hash
 {
-    int capacity; 
+    int capacity;
     QNode* *array;
 } Hash;
 
 Input* createInput(char* url, int port, char* object, int maxAge, long now, int length)
 {
-  Input* input = (Input *)malloc(sizeof( Input));
-  strcpy(input->url,url);
-  input->port = port;
-  memcpy(input->object, object, length);
-  input->maxAge = maxAge;
-  input->now = now;
-  input->length = length;
-  return input;
+    Input* input = (Input *)malloc(sizeof( Input));
+    strcpy(input->url,url);
+    input->port = port;
+    memcpy(input->object, object, length);
+    input->maxAge = maxAge;
+    input->now = now;
+    input->length = length;
+    return input;
 }
 
 QNode* newQNode( Input* input )
@@ -154,17 +139,17 @@ QNode* newQNode( Input* input )
     temp->prev = temp->next = NULL;
     return temp;
 }
- 
+
 Queue* createQueue( int numberOfFrames )
 {
-    Queue* queue = (Queue *)malloc( sizeof( Queue ) ); 
+    Queue* queue = (Queue *)malloc( sizeof( Queue ) );
     queue->count = 0;
     queue->front = queue->rear = NULL;
     queue->numberOfFrames = numberOfFrames;
- 
+
     return queue;
 }
- 
+
 
 Hash* createHash( int capacity )
 {
@@ -174,7 +159,7 @@ Hash* createHash( int capacity )
     int i;
     for( i = 0; i < hash->capacity; ++i )
         hash->array[i] = NULL;
- 
+
     return hash;
 }
 /*to see if queue is full*/
@@ -187,26 +172,26 @@ int isQueueEmpty( Queue* queue )
 {
     return queue->rear == NULL;
 }
- 
+
 void deQueue( Queue* queue )
 {
     if( isQueueEmpty( queue ) )
         return;
- 
+
     if (queue->front == queue->rear)
         queue->front = NULL;
- 
+
     QNode* temp = queue->rear;
     queue->rear = queue->rear->prev;
- 
+
     if (queue->rear)
         queue->rear->next = NULL;
- 
+
     free( temp );
 
     queue->count--;
 }
- 
+
 void Enqueue( Queue* queue, Hash* hash, Input* input )
 {
 
@@ -225,13 +210,13 @@ void Enqueue( Queue* queue, Hash* hash, Input* input )
         ifFull = true;
         deQueue( queue );
     }
- 
+
     QNode* temp = newQNode( input );
     temp->next = queue->front;
- 
+
     if ( isQueueEmpty( queue ) )
         queue->rear = queue->front = temp;
-    else 
+    else
     {
         queue->front->prev = temp;
         queue->front = temp;
@@ -251,7 +236,7 @@ void Enqueue( Queue* queue, Hash* hash, Input* input )
                 hash->array[i] = temp;
                 break;
             }
-        } 
+        }
     }
     queue->count++;
 }
@@ -275,7 +260,7 @@ void checkIfExpired(Queue* queue, Hash* hash)
                 if(queue->front)
                     queue->front->prev = NULL;
                 free(temp);
-            } 
+            }
             else
             {
                 temp->prev->next = temp->next;
@@ -310,29 +295,29 @@ void put_into_cache( Queue* queue, Hash* hash, Input* input )
             reqPage = hash->array[i];
         }
     }
- 
+
     if (!existed)
     {
         Enqueue( queue, hash, input);
         return;
-    }       
+    }
     else if (reqPage != queue->front)
     {
         reqPage->prev->next = reqPage->next;
         if (reqPage->next)
-           reqPage->next->prev = reqPage->prev;
-         if (reqPage == queue->rear)
+            reqPage->next->prev = reqPage->prev;
+        if (reqPage == queue->rear)
         {
-           queue->rear = reqPage->prev;
-           queue->rear->next = NULL;
+            queue->rear = reqPage->prev;
+            queue->rear->next = NULL;
         }
         reqPage->next = queue->front;
         reqPage->prev = NULL;
         reqPage->next->prev = reqPage;
- 
+
         queue->front = reqPage;
     }
-        //update the data
+    //update the data
     memcpy(reqPage->input->object,input->object, input->length);
     reqPage->input->port = input->port;
     reqPage->input->maxAge = input->maxAge;
@@ -341,7 +326,7 @@ void put_into_cache( Queue* queue, Hash* hash, Input* input )
 }
 
 /*get element out of cache*/
-Input* get_from_cache(Queue* queue, Hash* hash, char* url, int port) 
+Input* get_from_cache(Queue* queue, Hash* hash, char* url, int port)
 {
     Input* input;
     for (int i = 0; i < hash->capacity; i++)
@@ -358,30 +343,30 @@ Input* get_from_cache(Queue* queue, Hash* hash, char* url, int port)
             {
                 reqPage->prev->next = reqPage->next;
                 if (reqPage->next)
-                reqPage->next->prev = reqPage->prev;
+                    reqPage->next->prev = reqPage->prev;
                 if (reqPage == queue->rear)
                 {
-                queue->rear = reqPage->prev;
-                queue->rear->next = NULL;
+                    queue->rear = reqPage->prev;
+                    queue->rear->next = NULL;
                 }
                 reqPage->next = queue->front;
                 reqPage->prev = NULL;
                 reqPage->next->prev = reqPage;
-        
+
                 queue->front = reqPage;
             }
-            break;           
-        }         
+            break;
+        }
     }
     return input;
 }
 
 /*check if element exists in cache*/
 bool checkIfExisted(Hash* hash, Queue* queue, char* url, int port){
-  bool existed = false;
-  checkIfExpired(queue, hash);
-  if(queue->count == 0) return existed;
-  for (int i = 0; i < hash->capacity; i++)
+    bool existed = false;
+    checkIfExpired(queue, hash);
+    if(queue->count == 0) return existed;
+    for (int i = 0; i < hash->capacity; i++)
     {
         if(hash->array[i] == NULL)
         {
@@ -408,7 +393,7 @@ void print_cache(Queue *q){
 }
 /*get cached client requests*/
 struct client_info *get_client(struct client_info **client_list,
-        SOCKET s) {
+                               SOCKET s) {
     struct client_info *ci = *client_list;
 
     while(ci) {
@@ -419,7 +404,7 @@ struct client_info *get_client(struct client_info **client_list,
 
     if (ci) return ci;
     struct client_info *n =
-        (struct client_info*) calloc(1, sizeof(struct client_info));
+            (struct client_info*) calloc(1, sizeof(struct client_info));
 
     if (!n) {
         fprintf(stderr, "Out of memory.\n");
@@ -434,7 +419,7 @@ struct client_info *get_client(struct client_info **client_list,
 
 /*remove client from cache*/
 void drop_client(struct client_info **client_list,
-        struct client_info *client) {
+                 struct client_info *client) {
     if(client->socket != 0)
         CLOSESOCKET(client->socket);
 
@@ -456,9 +441,9 @@ void drop_client(struct client_info **client_list,
 
 const char *get_client_address(struct client_info *ci) {
     getnameinfo((struct sockaddr*)&ci->address,
-            ci->address_length,
-            ci->address_buffer, sizeof(ci->address_buffer), 0, 0,
-            NI_NUMERICHOST);
+                ci->address_length,
+                ci->address_buffer, sizeof(ci->address_buffer), 0, 0,
+                NI_NUMERICHOST);
     return ci->address_buffer;
 }
 
@@ -490,8 +475,8 @@ fd_set wait_on_clients(struct client_info **client_list, SOCKET server) {
 
 /*open the socket communicating with server*/
 int open_client_socket(struct client_info **client_list,
-    struct client_info *client, char* hostname, unsigned short port )
-    {
+                       struct client_info *client, char* hostname, unsigned short port )
+{
     struct hostent *he;
     struct sockaddr_in sa_in;
 
@@ -530,13 +515,13 @@ int open_client_socket(struct client_info **client_list,
             FD_ZERO(&set);
             FD_SET(sockfd, &set);
             struct timeval timeout;
-            timeout.tv_sec = 1; 
-            timeout.tv_usec = 0; 
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
             ret = select(sockfd+1, 0, &set, 0, &timeout);
             if (ret == 0 || (ret < 0 && errno != EINTR)) {
                 send_503(client_list,client);
                 return -1;
-            } else if (ret > 0) {               
+            } else if (ret > 0) {
                 optlen = sizeof(int);
                 if(getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (void *)(&optval), &optlen) < 0) {
                     send_503(client_list,client);
@@ -552,7 +537,7 @@ int open_client_socket(struct client_info **client_list,
             send_503(client_list,client);
             return -1;
         }
-        
+
     }
     fcntl(sockfd, F_SETFL, flags);
 
@@ -561,10 +546,10 @@ int open_client_socket(struct client_info **client_list,
 
 /*get response from server*/
 char* fetch_from_server(struct client_info **client_list,
-        struct client_info *client, char *host, char* address, unsigned short port, int *length){
-    
+                        struct client_info *client, char *host, char* address, unsigned short port, int *length){
+
     printf("fetch from server %s:%d %s\n", host, port, address);
-    
+
     char *serverContent = (char *)malloc(MAX_SIZE * sizeof(char));
     char buf[BSIZE];
     SOCKET sockfd;
@@ -576,7 +561,7 @@ char* fetch_from_server(struct client_info **client_list,
         sprintf(buf, "GET http://%s%s HTTP/1.1\r\nAccept: */*\r\nHost: %s\r\nConnection: Close\r\nUser-Agent: HighPerformanceHttpProxy\r\n\r\n",host,address,host);
         int ret;
         ret = send(sockfd, buf, strlen(buf), 0);
-        if (ret < 0) 
+        if (ret < 0)
             perror("ERROR writing to socket");
 
         int totalBytes = 0;
@@ -587,7 +572,7 @@ char* fetch_from_server(struct client_info **client_list,
         {
             memset(unsignedBuf,0,BSIZE);
             ret = recv(sockfd, unsignedBuf, BSIZE, MSG_WAITALL);
-            
+
             if(ret < 1)
                 break;
             memcpy(serverContent + totalBytes ,unsignedBuf,ret);
@@ -607,7 +592,7 @@ char* fetch_from_server(struct client_info **client_list,
 
 /*serve http request*/
 void serve_http_resource(struct client_info **client_list,
-        struct client_info *client, char *path, Hash *hash, Queue *q) {
+                         struct client_info *client, char *path, Hash *hash, Queue *q) {
 
     printf("serve_resource %s %s\n", get_client_address(client), path);
 
@@ -627,23 +612,23 @@ void serve_http_resource(struct client_info **client_list,
     (void) strncpy( path, "http", 4 );       /* make sure it's lower case */
     if ( sscanf( path, "http://%[^:/]:%d%s", host, &portno, address) == 3 )
         port = (unsigned short) portno;
-        else if ( sscanf( path, "http://%[^/]%s", host, address) == 2 )
-            port = 80;
-        else if ( sscanf( path, "http://%[^:/]:%d", host, &portno) == 2 )
-        {
-            port = (unsigned short) portno;
-            *address = '\0';
-        }
-        else if ( sscanf( path, "http://%[^/]", host) == 1 )
-        {
-            port = 80;
-            *address = '\0';
-        }
-        else {
-            send_400(client_list, client);
-            return ;
-        }
-    
+    else if ( sscanf( path, "http://%[^/]%s", host, address) == 2 )
+        port = 80;
+    else if ( sscanf( path, "http://%[^:/]:%d", host, &portno) == 2 )
+    {
+        port = (unsigned short) portno;
+        *address = '\0';
+    }
+    else if ( sscanf( path, "http://%[^/]", host) == 1 )
+    {
+        port = 80;
+        *address = '\0';
+    }
+    else {
+        send_400(client_list, client);
+        return ;
+    }
+
     char url[10000] = "";
     strcat(url, host);
     strcat(url, address);
@@ -660,7 +645,7 @@ void serve_http_resource(struct client_info **client_list,
 
             //*(content + (int)server_content + length - (int)con_index + 4) = '\0';
             *(header + (int)con_index - (int)server_content) = '\0';
-          
+
             printf("\nheader:\n%s\n", header);
             char *cache_index_start = strstr(header, "Cache-Control:");
             if(cache_index_start) {
@@ -675,7 +660,7 @@ void serve_http_resource(struct client_info **client_list,
                 }
                 printf("cache control: %s\n", cache_control);
                 if (sscanf(cache_control, "max-age=%s", max_age) == 1) exist_max_age = true;
-                
+
             }
             send(client->socket, server_content, length, 0);
             if (length > 10 * 1024 && length < MAX_SIZE){
@@ -684,13 +669,13 @@ void serve_http_resource(struct client_info **client_list,
                 time_t now;
                 Input* input = createInput(url, port, server_content, atoi(max_age), time(&now), length);
                 put_into_cache(q, hash, input);
-                
+
             }
             free(server_content);
             print_cache(q);
         } else{return;}
 
-        
+
     }else{
         printf("existed!!!!!\n");
         time_t now;
@@ -699,12 +684,12 @@ void serve_http_resource(struct client_info **client_list,
         print_cache(q);
     }
 
-     drop_client(client_list, client);
+    drop_client(client_list, client);
 }
 
 /*https communication*/
-void proxy_https_get_from_client(struct client_info **client_list,struct client_info *client, 
-        struct client_info *server){
+void proxy_https_get_from_client(struct client_info **client_list,struct client_info *client,
+                                 struct client_info *server){
 
     printf("start transfer https data\n");
     int client_fd, server_fd;
@@ -730,21 +715,12 @@ void proxy_https_get_from_client(struct client_info **client_list,struct client_
             drop_client(client_list, client);
             drop_client(client_list, server);
         }
-    }        
+    }
 }
 
 /*serve http request*/
-// struct client_info **client_list,
-//        struct client_info *client, const char *path
-void serve_https_resource(void* argv) {
-
-    //===================
-    Param* para = (Param *)argv;
-
-    struct client_info **client_list = para->client_list;
-    struct client_info *client = para->client;
-    const char *path = para->path;
-    //===================
+void serve_https_resource(struct client_info **client_list,
+                          struct client_info *client, const char *path) {
 
     printf("serve_resource %s %s\n", get_client_address(client), path);
 
@@ -775,7 +751,7 @@ void serve_https_resource(void* argv) {
 
     if (sockfd > 0) {
         client->server_socket = sockfd;
-        //treat server socket as client  
+        //treat server socket as client
         server->socket = sockfd;
         server->is_https = true;
         server->is_server = true;
@@ -797,57 +773,52 @@ void serve_https_resource(void* argv) {
 }
 
 void send_400(struct client_info **client_list,
-        struct client_info *client) {
+              struct client_info *client) {
     const char *c400 = "HTTP/1.1 400 Bad Request\r\n"
-        "Connection: close\r\n"
-        "Content-Length: 11\r\n\r\nBad Request";
+                       "Connection: close\r\n"
+                       "Content-Length: 11\r\n\r\nBad Request";
     send(client->socket, c400, strlen(c400), 0);
     drop_client(client_list, client);
 }
 
 void send_404(struct client_info **client_list,
-        struct client_info *client) {
+              struct client_info *client) {
     const char *c400 = "HTTP/1.1 404 Not Found\r\n"
-        "Connection: close\r\n"
-        "Content-Length: 13\r\n\r\nUnknown Hosts";
+                       "Connection: close\r\n"
+                       "Content-Length: 13\r\n\r\nUnknown Hosts";
     send(client->socket, c400, strlen(c400), 0);
     drop_client(client_list, client);
 }
 
 void send_408(struct client_info **client_list,
-        struct client_info *client) {
+              struct client_info *client) {
     const char *c400 = "HTTP/1.1 408 Request Timeout\r\n"
-        "Connection: close\r\n"
-        "Content-Length: 15\r\n\r\nRequest Timeout";
+                       "Connection: close\r\n"
+                       "Content-Length: 15\r\n\r\nRequest Timeout";
     send(client->socket, c400, strlen(c400), 0);
     drop_client(client_list, client);
 }
 
 void send_500(struct client_info **client_list,
-        struct client_info *client) {
+              struct client_info *client) {
     const char *c400 = "HTTP/1.1 500 Internal Error\r\n"
-        "Connection: close\r\n"
-        "Content-Length: 23\r\n\r\nCould not create socket";
+                       "Connection: close\r\n"
+                       "Content-Length: 23\r\n\r\nCould not create socket";
     send(client->socket, c400, strlen(c400), 0);
     drop_client(client_list, client);
 }
 
 void send_503(struct client_info **client_list,
-        struct client_info *client) {
+              struct client_info *client) {
     const char *c400 = "HTTP/1.1 503 Service Unavailable\r\n"
-        "Connection: close\r\n"
-        "Content-Length: 18\r\n\r\nConnection refused";
+                       "Connection: close\r\n"
+                       "Content-Length: 18\r\n\r\nConnection refused";
     send(client->socket, c400, strlen(c400), 0);
     printf("connection refuesd\n");
     drop_client(client_list, client);
 }
 
-
-
 int main() {
-	
-    pthread_t tid;
-    pthread_mutex_init(&mutex,NULL);
 
     SOCKET server = create_socket(0, "8080");
 
@@ -865,8 +836,8 @@ int main() {
             struct client_info *client = get_client(&client_list, -1);
 
             client->socket = accept(server,
-                    (struct sockaddr*) &(client->address),
-                    &(client->address_length));
+                                    (struct sockaddr*) &(client->address),
+                                    &(client->address_length));
 
             if (!ISVALIDSOCKET(client->socket)) {
                 fprintf(stderr, "accept() failed. (%d)\n",
@@ -876,7 +847,7 @@ int main() {
 
             printf("======================================================================================\n");
             printf("New connection from %s.\n",
-                    get_client_address(client));
+                   get_client_address(client));
         }
 
 
@@ -893,14 +864,14 @@ int main() {
                 }
 
                 int r = recv(client->socket,
-                        client->request + client->received,
-                        MAX_REQUEST_SIZE - client->received, 0);
-                
+                             client->request + client->received,
+                             MAX_REQUEST_SIZE - client->received, 0);
+
                 printf("%s\n", client->request);
 
                 if (r < 1) {
                     printf("Unexpected disconnect from %s.\n",
-                            get_client_address(client));
+                           get_client_address(client));
                     drop_client(&client_list, client);
 
                 } else {
@@ -933,22 +904,7 @@ int main() {
                                     *end_path = 0;
                                     printf("======================================================================================\n");
                                     client->is_https = true;
-
-                                    //==========================
-                                    pthread_t thread;
-                                    Param *para = (Param*)malloc(sizeof(Param)); // warp param into a sturct
-                                    para->client_list = &client_list;
-                                    para->client = client;
-                                    para->path = path;
-                                    pthread_create(&thread,NULL,(void *)serve_https_resource,(void *)para); // create a thread
-                                    pthread_join(thread,NULL);
-                                    free(para);
-                                    para = NULL;
-                                    //==========================
-
-
-
-                                    //serve_https_resource(&client_list, client, path);
+                                    serve_https_resource(&client_list, client, path);
                                 }
                             }
                         }
