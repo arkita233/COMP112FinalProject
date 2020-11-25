@@ -417,6 +417,8 @@ void print_cache(Queue *q){
 /*get cached client requests*/
 struct client_info *get_client(struct client_info **client_list,
         SOCKET s) {
+
+
     struct client_info *ci = *client_list;
 
     while(ci) {
@@ -459,6 +461,9 @@ void drop_client(struct client_info **client_list,
 
     fprintf(stderr, "drop_client not found.\n");
     //exit(1);
+
+
+
 }
 
 
@@ -748,7 +753,7 @@ void proxy_https_get_from_client(void* argv){
             drop_client(client_list, client);
             drop_client(client_list, server);
         }
-    }        
+    }
 }
 
 
@@ -812,15 +817,7 @@ void serve_https_resource(void* argv) {
         printf("send feedback to client successfully\n");
 
 
-        //==========================
-        gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
-        para->client_list = client_list;
-        para->client = client;
-        para->server = server;
-        proxy_https_get_from_client((void *) para);
-        free(para);
-        para = NULL;
-        //==========================
+
 
 
         //proxy_https_get_from_client( client_list, client, server);
@@ -895,7 +892,7 @@ int main() {
     Queue *queue = createQueue(100);
 
     while(1) {
-
+        pthread_t thread;
         fd_set reads;
         reads = wait_on_clients(&client_list, server);
 
@@ -920,6 +917,7 @@ int main() {
 
         struct client_info *client = client_list;
         while(client) {
+
             struct client_info *next = client->next;
 
             if (FD_ISSET(client->socket, &reads) && !client->server_socket && !client->is_server) {
@@ -973,7 +971,8 @@ int main() {
                                     client->is_https = true;
 
                                     //==========================
-                                    pthread_t thread;
+
+
                                     Param *para = (Param*)malloc(sizeof(Param)); // warp param into a sturct
                                     para->client_list = &client_list;
                                     para->client = client;
@@ -998,7 +997,7 @@ int main() {
                     printf("get data from server %d\n", client->socket);
 
                     //==========================
-                    pthread_t thread;
+
                     gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
                     para->client_list = &client_list;
                     para->client = client;
@@ -1021,7 +1020,7 @@ int main() {
                     printf("get data from client %d\n", client->socket);
 
                     //==========================
-                    pthread_t thread;
+                    //pthread_t thread;
                     gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
                     para->client_list = &client_list;
                     para->client = client;
@@ -1039,6 +1038,7 @@ int main() {
             }
 
             client = next;
+
         }
 
     } //while(1)
