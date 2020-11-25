@@ -58,6 +58,14 @@ typedef struct thrArgs
     const char *path;
 
 }Param;
+
+typedef struct gfcArgs
+{
+    struct client_info **client_list;
+    struct client_info *client;
+    struct client_info *server;
+
+}gfcParam;
 //==============================================
 
 SOCKET create_socket(const char* host, const char *port) {
@@ -703,8 +711,18 @@ void serve_http_resource(struct client_info **client_list,
 }
 
 /*https communication*/
-void proxy_https_get_from_client(struct client_info **client_list,struct client_info *client, 
-        struct client_info *server){
+void proxy_https_get_from_client(void* argv){
+
+    // struct client_info **client_list,struct client_info *client,
+    //        struct client_info *server
+    //
+    //===================
+    gfcParam* para = (gfcParam *)argv;
+
+    struct client_info **client_list = para->client_list;
+    struct client_info *client = para->client;
+    struct client_info *server = para->server;
+    //===================
 
     printf("start transfer https data\n");
     int client_fd, server_fd;
@@ -732,6 +750,12 @@ void proxy_https_get_from_client(struct client_info **client_list,struct client_
         }
     }        
 }
+
+
+
+
+
+
 
 /*serve http request*/
 // struct client_info **client_list,
@@ -787,7 +811,19 @@ void serve_https_resource(void* argv) {
         if(r <= 0) return;
         printf("send feedback to client successfully\n");
 
-        proxy_https_get_from_client( client_list, client, server);
+
+        //==========================
+        gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+        para->client_list = client_list;
+        para->client = client;
+        para->server = server;
+        proxy_https_get_from_client((void *) para);
+        free(para);
+        para = NULL;
+        //==========================
+
+
+        //proxy_https_get_from_client( client_list, client, server);
         printf("https transfer finished\n");
     }  else {
         drop_client(client_list, client);
@@ -841,6 +877,8 @@ void send_503(struct client_info **client_list,
     printf("connection refuesd\n");
     drop_client(client_list, client);
 }
+
+
 
 
 
@@ -958,7 +996,22 @@ int main() {
                 if(client->is_https) {
                     //client is actual server
                     printf("get data from server %d\n", client->socket);
-                    proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
+
+                    //==========================
+                    pthread_t thread;
+                    gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+                    para->client_list = &client_list;
+                    para->client = client;
+                    para->server = get_client(&client_list, client->server_socket);
+                    pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
+                    pthread_join(thread,NULL);
+                    free(para);
+                    para = NULL;
+                    //==========================
+
+
+
+                    //proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
                 } else{
 
                 }
@@ -966,7 +1019,20 @@ int main() {
             }else if (FD_ISSET(client->socket, &reads) && !client->is_server && client->server_socket) {//send data to server
                 if (client->is_https) {
                     printf("get data from client %d\n", client->socket);
-                    proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
+
+                    //==========================
+                    pthread_t thread;
+                    gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+                    para->client_list = &client_list;
+                    para->client = client;
+                    para->server = get_client(&client_list, client->server_socket);
+                    pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
+                    pthread_join(thread,NULL);
+                    free(para);
+                    para = NULL;
+                    //==========================
+
+                    //proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
                 } else{
 
                 }
