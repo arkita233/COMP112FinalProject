@@ -12,7 +12,7 @@
 #include <sys/wait.h>
 #include <netinet/in.h> 
 #include <string.h>
-
+#include <pthread.h>
 
 #define BUFSIZE 1024
 #define TIMEOUT 300

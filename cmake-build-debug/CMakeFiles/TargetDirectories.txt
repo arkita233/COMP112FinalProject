@@ -1,0 +1,3 @@
+/home/sixiangz/Desktop/COMP112FinalProject/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/home/sixiangz/Desktop/COMP112FinalProject/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/sixiangz/Desktop/COMP112FinalProject/cmake-build-debug/CMakeFiles/COMP112FinalProject.dir
