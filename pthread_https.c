@@ -66,6 +66,11 @@ typedef struct gfcArgs
     struct client_info *server;
 
 }gfcParam;
+
+typedef struct dwcArgs {
+    fd_set reads;
+
+} dwcParam;
 //==============================================
 
 SOCKET create_socket(const char* host, const char *port) {
@@ -445,15 +450,19 @@ struct client_info *get_client(struct client_info **client_list,
 /*remove client from cache*/
 void drop_client(struct client_info **client_list,
                  struct client_info *client) {
-    if(client->socket != 0)
-        CLOSESOCKET(client->socket);
+
 
     struct client_info **p = client_list;
 
     while(*p) {
         if (*p == client) {
+
+            if(client->socket != 0) // if find then drop
+                CLOSESOCKET(client->socket);
+
             *p = client->next;
             free(client);
+
             return;
         }
         p = &(*p)->next;
@@ -461,7 +470,6 @@ void drop_client(struct client_info **client_list,
 
     fprintf(stderr, "drop_client not found.\n");
     //exit(1);
-
 
 
 }
@@ -875,8 +883,165 @@ void send_503(struct client_info **client_list,
     drop_client(client_list, client);
 }
 
+SOCKET server;
+struct client_info *client_list;
+Hash *hash;
+Queue *queue;
+
+void dealWithClient(void* args){
 
 
+    dwcParam *para = (dwcParam*)args;
+    fd_set reads = para->reads;
+
+
+    // struct client_info *client,struct client_info *next,fd_set reads
+    if (FD_ISSET(server, &reads)) {
+        struct client_info *client = get_client(&client_list, -1);
+
+        client->socket = accept(server,
+                                (struct sockaddr*) &(client->address),
+                                &(client->address_length));
+
+        if (!ISVALIDSOCKET(client->socket)) {
+            fprintf(stderr, "accept() failed. (%d)\n",
+                    GETSOCKETERRNO());
+            return;
+        }
+
+        printf("======================================================================================\n");
+        printf("New connection from %s.\n",
+               get_client_address(client));
+    }
+
+
+    struct client_info *client = client_list;
+    while(client) {
+        struct client_info *next = client->next;
+
+
+
+        if (FD_ISSET(client->socket, &reads) && !client->server_socket && !client->is_server) {
+
+            if (MAX_REQUEST_SIZE == client->received) {
+                send_400(&client_list, client);
+                client = next;
+                continue;
+            }
+
+            int r = recv(client->socket,
+                         client->request + client->received,
+                         MAX_REQUEST_SIZE - client->received, 0);
+
+            printf("%s\n", client->request);
+
+            if (r < 1) {
+                printf("Unexpected disconnect from %s.\n",
+                       get_client_address(client));
+                drop_client(&client_list, client);
+
+            } else {
+                client->received += r;
+                client->request[client->received] = 0;
+
+                char *q = strstr(client->request, "\r\n\r\n");
+                if (q) {
+                    *q = 0;
+
+                    if (strncmp("GET ", client->request, 4) && strncmp("CONNECT ", client->request, 8)) {
+                        send_400(&client_list, client);//(strncmp("GET ", client->request, 4) && strncmp("CONNECT ", client->request, 8))
+                    } else {
+                        if (strncmp("GET ", client->request, 4) == 0){
+                            char *path = client->request + 4;
+                            char *end_path = strstr(path, " ");
+                            if (!end_path) {
+                                send_400(&client_list, client);
+                            } else {
+                                *end_path = 0;
+                                printf("======================================================================================\n");
+                                serve_http_resource(&client_list, client, path, hash, queue);
+                            }
+                        } else {
+                            char *path = client->request + 8;
+                            char *end_path = strstr(path, " ");
+                            if (!end_path) {
+                                send_400(&client_list, client);
+                            } else {
+                                *end_path = 0;
+                                printf("======================================================================================\n");
+                                client->is_https = true;
+
+                                //==========================
+
+                                pthread_t thread;
+                                Param *para = (Param*)malloc(sizeof(Param)); // warp param into a sturct
+                                para->client_list = &client_list;
+                                para->client = client;
+                                para->path = path;
+                                pthread_create(&thread,NULL,(void *)serve_https_resource,(void *)para); // create a thread
+                                pthread_join(thread,NULL);
+                                free(para);
+                                para = NULL;
+                                //==========================
+
+
+
+                                //serve_https_resource(&client_list, client, path);
+                            }
+                        }
+                    }
+                } //if (q)
+            }
+        } else if (FD_ISSET(client->socket, &reads) && client->is_server && client->server_socket){//read data from server
+            if(client->is_https) {
+                //client is actual server
+                printf("get data from server %d\n", client->socket);
+
+                //==========================
+                pthread_t thread;
+                gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+                para->client_list = &client_list;
+                para->client = client;
+                para->server = get_client(&client_list, client->server_socket);
+                pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
+                pthread_join(thread,NULL);
+                free(para);
+                para = NULL;
+                //==========================
+
+
+
+                //proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
+            } else{
+
+            }
+
+        }else if (FD_ISSET(client->socket, &reads) && !client->is_server && client->server_socket) {//send data to server
+            if (client->is_https) {
+                printf("get data from client %d\n", client->socket);
+
+                //==========================
+                pthread_t thread;
+                gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+                para->client_list = &client_list;
+                para->client = client;
+                para->server = get_client(&client_list, client->server_socket);
+                pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
+                pthread_join(thread,NULL);
+                free(para);
+                para = NULL;
+                //==========================
+
+                //proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
+            } else{
+
+            }
+        }
+
+        client = next;
+    }
+
+}
 
 
 int main() {
@@ -884,162 +1049,25 @@ int main() {
     pthread_t tid;
     pthread_mutex_init(&mutex,NULL);
 
-    SOCKET server = create_socket(0, "8080");
+    server = create_socket(0, "8080");
 
-    struct client_info *client_list = 0;
+    client_list = 0;
 
-    Hash *hash = createHash(100);
-    Queue *queue = createQueue(100);
+    hash = createHash(100);
+    queue = createQueue(100);
+
+    dwcParam *para= (dwcParam*)malloc(sizeof(dwcParam));
 
     while(1) {
-        pthread_t thread;
+        //pthread_t thread;
         fd_set reads;
         reads = wait_on_clients(&client_list, server);
+        para->reads = reads;
 
-        if (FD_ISSET(server, &reads)) {
-            struct client_info *client = get_client(&client_list, -1);
+        pthread_create(&tid,NULL,(void*)dealWithClient,(void*)para);
+        pthread_join(tid,NULL);
+        //dealWithClient((void*)para);
 
-            client->socket = accept(server,
-                                    (struct sockaddr*) &(client->address),
-                                    &(client->address_length));
-
-            if (!ISVALIDSOCKET(client->socket)) {
-                fprintf(stderr, "accept() failed. (%d)\n",
-                        GETSOCKETERRNO());
-                return 1;
-            }
-
-            printf("======================================================================================\n");
-            printf("New connection from %s.\n",
-                   get_client_address(client));
-        }
-
-
-        struct client_info *client = client_list;
-        while(client) {
-
-            struct client_info *next = client->next;
-
-            if (FD_ISSET(client->socket, &reads) && !client->server_socket && !client->is_server) {
-
-                if (MAX_REQUEST_SIZE == client->received) {
-                    send_400(&client_list, client);
-                    client = next;
-                    continue;
-                }
-
-                int r = recv(client->socket,
-                             client->request + client->received,
-                             MAX_REQUEST_SIZE - client->received, 0);
-
-                printf("%s\n", client->request);
-
-                if (r < 1) {
-                    printf("Unexpected disconnect from %s.\n",
-                           get_client_address(client));
-                    drop_client(&client_list, client);
-
-                } else {
-                    client->received += r;
-                    client->request[client->received] = 0;
-
-                    char *q = strstr(client->request, "\r\n\r\n");
-                    if (q) {
-                        *q = 0;
-
-                        if (strncmp("GET ", client->request, 4) && strncmp("CONNECT ", client->request, 8)) {
-                            send_400(&client_list, client);//(strncmp("GET ", client->request, 4) && strncmp("CONNECT ", client->request, 8))
-                        } else {
-                            if (strncmp("GET ", client->request, 4) == 0){
-                                char *path = client->request + 4;
-                                char *end_path = strstr(path, " ");
-                                if (!end_path) {
-                                    send_400(&client_list, client);
-                                } else {
-                                    *end_path = 0;
-                                    printf("======================================================================================\n");
-                                    serve_http_resource(&client_list, client, path, hash, queue);
-                                }
-                            } else {
-                                char *path = client->request + 8;
-                                char *end_path = strstr(path, " ");
-                                if (!end_path) {
-                                    send_400(&client_list, client);
-                                } else {
-                                    *end_path = 0;
-                                    printf("======================================================================================\n");
-                                    client->is_https = true;
-
-                                    //==========================
-
-
-                                    Param *para = (Param*)malloc(sizeof(Param)); // warp param into a sturct
-                                    para->client_list = &client_list;
-                                    para->client = client;
-                                    para->path = path;
-                                    pthread_create(&thread,NULL,(void *)serve_https_resource,(void *)para); // create a thread
-                                    pthread_join(thread,NULL);
-                                    free(para);
-                                    para = NULL;
-                                    //==========================
-
-
-
-                                    //serve_https_resource(&client_list, client, path);
-                                }
-                            }
-                        }
-                    } //if (q)
-                }
-            } else if (FD_ISSET(client->socket, &reads) && client->is_server && client->server_socket){//read data from server
-                if(client->is_https) {
-                    //client is actual server
-                    printf("get data from server %d\n", client->socket);
-
-                    //==========================
-
-                    gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
-                    para->client_list = &client_list;
-                    para->client = client;
-                    para->server = get_client(&client_list, client->server_socket);
-                    pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
-                    pthread_join(thread,NULL);
-                    free(para);
-                    para = NULL;
-                    //==========================
-
-
-
-                    //proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
-                } else{
-
-                }
-
-            }else if (FD_ISSET(client->socket, &reads) && !client->is_server && client->server_socket) {//send data to server
-                if (client->is_https) {
-                    printf("get data from client %d\n", client->socket);
-
-                    //==========================
-                    //pthread_t thread;
-                    gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
-                    para->client_list = &client_list;
-                    para->client = client;
-                    para->server = get_client(&client_list, client->server_socket);
-                    pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
-                    pthread_join(thread,NULL);
-                    free(para);
-                    para = NULL;
-                    //==========================
-
-                    //proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket));
-                } else{
-
-                }
-            }
-
-            client = next;
-
-        }
 
     } //while(1)
 
