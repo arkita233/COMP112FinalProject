@@ -1,1 +1,0 @@
-/usr/bin/cc -g   CMakeFiles/COMP112FinalProject.dir/fork_ver.c.o CMakeFiles/COMP112FinalProject.dir/pthread_https.c.o  -o COMP112FinalProject 
