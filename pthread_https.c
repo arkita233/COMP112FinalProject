@@ -699,7 +699,7 @@ void serve_http_resource(struct client_info **client_list,
 
             }
             send(client->socket, server_content, length, 0);
-            if (length > 10 * 1024 && length < MAX_SIZE){
+            if (length > 0 && length < MAX_SIZE){
                 if(!exist_max_age) strcpy(max_age, "3600");
                 printf("max-age is %s\n", max_age);
                 time_t now;
