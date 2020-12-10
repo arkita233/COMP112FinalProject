@@ -36,15 +36,14 @@ int create_server_socket(int port);
 
 void handle(void *args);
 
-void proxy_ssl(int server, int client);
 
 int create_connection(char *hostname, int portno);
 
 void error(char *msg);
 
-void proxy_ssl(int server, int client);
+void proxy_ssl(void* args);
 
-void proxy_http(int server, int client);
+void proxy_http(void* args);
 
 typedef struct thrArgs {
     int newsock;
@@ -53,12 +52,21 @@ typedef struct thrArgs {
 } Param;
 
 
+typedef struct thrArgs2
+{
+    int server;
+   int client;
+
+}Param2;
+
+
+
 int main(int argc, char **argv) {
 
     int portno = 8080; /* port to listen on */
     char buf[BUFSIZE]; /* message buffer */
 
-
+    pthread_mutex_t mutex;
 
 
 
@@ -68,7 +76,7 @@ int main(int argc, char **argv) {
     int parentfd = create_server_socket(portno); /* parent socket */
     int childfd; /* child socket */
     //int clientlen;
-    pthread_mutex_t mutex;
+
 
 
     signal(SIGCHLD, sigchld_handler);
@@ -87,7 +95,7 @@ int main(int argc, char **argv) {
 
 
         if (childfd > 0) {
-            pthread_create(&tid, NULL, (void *) handle, (void *) para);
+            pthread_create(&tid, NULL, (void*) handle, (void*) para);
             pthread_detach(tid);
         }
 
@@ -153,6 +161,8 @@ void handle(void *args) {
     int n = 0;
     char request[BUFSIZE]; // http request from client
     bzero(request, BUFSIZE);
+
+
     n = read(newsock, request, BUFSIZE);
 
 
@@ -217,7 +227,18 @@ void handle(void *args) {
             write(newsock, buff, strlen(buff));
 
 
-            proxy_ssl(server_sock, newsock);
+            pthread_t thread;
+            Param2 *para = (Param2*)malloc(sizeof(Param2)); // warp param into a sturct
+            para->server = server_sock;
+            para->client = newsock;
+            pthread_create(&thread,NULL,(void *)proxy_ssl,(void *)para); // create a thread
+            pthread_join(thread,NULL);
+            free(para);
+            para = NULL;
+
+
+
+            //proxy_ssl(server_sock, newsock);
 
 
         } else {
@@ -225,7 +246,17 @@ void handle(void *args) {
 
             write(server_sock, request, strlen(request));
 
-            proxy_http(server_sock, newsock);
+            pthread_t thread;
+            Param2 *para = (Param2*)malloc(sizeof(Param2)); // warp param into a sturct
+            para->server = server_sock;
+            para->client = newsock;
+            pthread_create(&thread,NULL,(void *)proxy_http,(void *)para); // create a thread
+            pthread_join(thread,NULL);
+            free(para);
+            para = NULL;
+
+
+            //proxy_http(server_sock, newsock);
 
         }
 
@@ -234,7 +265,8 @@ void handle(void *args) {
 
 
     //close(server_sock);
-    close(newsock);
+
+
 
 
 }
@@ -256,7 +288,7 @@ int create_connection(char *hostname, int portno) {
     server = gethostbyname(hostname);
     if (server == NULL) {
         fprintf(stderr, "ERROR, no such host as %s\n", hostname);
-        exit(0);
+        //exit(0);
     }
 
     /* build the server's Internet address */
@@ -281,7 +313,14 @@ int create_connection(char *hostname, int portno) {
 }
 
 
-void proxy_ssl(int server, int client) {
+void proxy_ssl(void* args) {
+
+    Param2* para = (Param2 *)args;
+
+    int server = para->server;
+    int client = para->client;
+
+
     struct timeval timeout;
     timeout.tv_sec = TIMEOUT;
     timeout.tv_usec = 0;
@@ -325,7 +364,14 @@ void proxy_ssl(int server, int client) {
 }
 
 
-void proxy_http(int server, int client) {
+void proxy_http(void* args) {
+
+    Param2* para = (Param2 *)args;
+
+    int server = para->server;
+    int client = para->client;
+
+
     struct timeval timeout;
     timeout.tv_sec = TIMEOUT;
     timeout.tv_usec = 0;
