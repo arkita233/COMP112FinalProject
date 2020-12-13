@@ -1312,10 +1312,10 @@ Queue *queue;
 
 void dealWithClient(void* args){
     dwcParam *para = (dwcParam*)args;
+	fd_set reads = para->reads;
+ 
 
-    while(1) {
-
-        fd_set reads;
+        
         printf("new select\n");
         reads = wait_on_clients(&client_list, server);
 
@@ -1480,7 +1480,7 @@ void dealWithClient(void* args){
             
         }
 
-    } //while(1)
+
 }
 
 int main(int argc, char **argv) {
