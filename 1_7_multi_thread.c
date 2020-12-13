@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <regex.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
