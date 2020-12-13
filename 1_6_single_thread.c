@@ -887,7 +887,7 @@ void get_new_certificate(SSL *server_ssl, SSL_CTX *client_ctx){
     X509 *client_cert = X509_new();
     uint64_t pr;
     ASN1_INTEGER_get_uint64(&pr, X509_get_serialNumber(server_X509));
-    ASN1_INTEGER_set(X509_get_serialNumber(client_cert), pr);
+    ASN1_INTEGER_set(X509_get_serialNumber(client_cert), pr+1);
     X509_gmtime_adj(X509_get_notBefore(client_cert), 0);
 	X509_gmtime_adj(X509_get_notAfter(client_cert), 31536000L);
 
@@ -921,10 +921,6 @@ void get_new_certificate(SSL *server_ssl, SSL_CTX *client_ctx){
 /*https communication*/
 int proxy_https_get_from_client(struct client_info **client_list,struct client_info *client, 
         struct client_info *server){
-signal(SIGBUS, signal_handler);
-  signal(SIGILL, signal_handler);
-  signal(SIGSEGV, signal_handler);
-  signal(SIGABRT, signal_handler);
 
     printf("start transfer https data\n");
     int client_fd, server_fd, r, r1;
@@ -938,7 +934,13 @@ signal(SIGBUS, signal_handler);
 
     memset(buf, 0, sizeof(buf));
     
+    //set SSL_read timeout
+    int flags;
+    flags = fcntl(client->socket, F_GETFL, 0);
+    struct timeval timeout={3,0};//5s
+    setsockopt(client->socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout,sizeof(timeout));
     r = SSL_read(client->ssl, buf, sizeof(buf));
+    fcntl(client->socket, F_SETFL, flags);
     printf("read successfully\n");
     if (r <= 0){
         printf("client close socket \n");
@@ -952,59 +954,59 @@ signal(SIGBUS, signal_handler);
         time_t now;
         client->start_time = time(&now);
         // //do filtering
-        // char match_str[256] = "<p>[^<>]*";
-        // strcat(match_str, BOLD_WORDS);
-        // strcat(match_str, "[^<>]*</p>");
+        char match_str[256] = "<p>[^<>]*";
+        strcat(match_str, BOLD_WORDS);
+        strcat(match_str, "[^<>]*</p>");
 
-        // regex_t buf_reg;
-        // regmatch_t pmatch;
-        // regcomp(&buf_reg,match_str,REG_EXTENDED);
-        // if(regexec(&buf_reg,buf,1, &pmatch, 0) == 0){
-        //     printf("match success\n");
-        //     printf("%lld \t %lld", pmatch.rm_so, pmatch.rm_eo);
-        //     char *filter_start = strstr(buf + pmatch.rm_so, BOLD_WORDS);
-        //     if (filter_start) {
-        //         printf("find the target\n");
+        regex_t buf_reg;
+        regmatch_t pmatch;
+        regcomp(&buf_reg,match_str,REG_EXTENDED);
+        if(regexec(&buf_reg,buf,1, &pmatch, 0) == 0){
+            printf("match success\n");
+            printf("%lld \t %lld", pmatch.rm_so, pmatch.rm_eo);
+            char *filter_start = strstr(buf + pmatch.rm_so, BOLD_WORDS);
+            if (filter_start) {
+                printf("find the target\n");
             
-        //         char new_bold[100];
-        //         memcpy(new_buf, buf, filter_start - buf);
-        //         //strcpy(new_bold, "<strong>");
-        //         //strcpy(new_bold + 8, BOLD_WORDS);
-        //         //strcpy(new_bold + 8 + strlen(BOLD_WORDS), "</strong>");
-        //         //int new_bold_len = 17 + strlen(BOLD_WORDS);
-        //         //printf("new_bold is %s, new_bold_len is %d\n", new_bold, new_bold_len);
-        //         for (int i = 0; i < strlen(BOLD_WORDS); i++) {
-        //             strcat(new_bold, " ");
-        //         }
-        //         memcpy(new_buf + (filter_start - buf), new_bold, strlen(BOLD_WORDS));
-        //         memcpy(new_buf + strlen(BOLD_WORDS) + (filter_start - buf) , buf + strlen(BOLD_WORDS) + (filter_start - buf), buf + r - filter_start - strlen(BOLD_WORDS));
+                char new_bold[100];
+                memcpy(new_buf, buf, filter_start - buf);
+                //strcpy(new_bold, "<strong>");
+                //strcpy(new_bold + 8, BOLD_WORDS);
+                //strcpy(new_bold + 8 + strlen(BOLD_WORDS), "</strong>");
+                //int new_bold_len = 17 + strlen(BOLD_WORDS);
+                //printf("new_bold is %s, new_bold_len is %d\n", new_bold, new_bold_len);
+                for (int i = 0; i < strlen(BOLD_WORDS); i++) {
+                    strcat(new_bold, " ");
+                }
+                memcpy(new_buf + (filter_start - buf), new_bold, strlen(BOLD_WORDS));
+                memcpy(new_buf + strlen(BOLD_WORDS) + (filter_start - buf) , buf + strlen(BOLD_WORDS) + (filter_start - buf), buf + r - filter_start - strlen(BOLD_WORDS));
                 
-        //         FILE *receive;
-        //         if((receive = fopen("bold1","wb")) == NULL)
-        //         {
-        //             perror("fail to read");
-        //             exit (1) ;
-        //         }
-        //         fwrite(new_buf,r,1,receive);
+                FILE *receive;
+                if((receive = fopen("bold1","wb")) == NULL)
+                {
+                    perror("fail to read");
+                    exit (1) ;
+                }
+                fwrite(new_buf,r,1,receive);
 
-        //         fclose(receive);
-        //         if((receive = fopen("bold2","wb")) == NULL)
-        //         {
-        //             perror("fail to read");
-        //             exit (1) ;
-        //         }
-        //         fwrite(buf,r ,1,receive);
-        //         fclose(receive);
+                fclose(receive);
+                if((receive = fopen("bold2","wb")) == NULL)
+                {
+                    perror("fail to read");
+                    exit (1) ;
+                }
+                fwrite(buf,r ,1,receive);
+                fclose(receive);
                 
-        //         for (int i = 0; i < r; i++) {
-        //             printf("%c", buf[i]);
-        //         }
-        //        r1 = 1;
-        //     }
-        // }
-        // regfree(&buf_reg);
+                for (int i = 0; i < r; i++) {
+                    printf("%c", buf[i]);
+                }
+               r1 = 1;
+            }
+        }
+        regfree(&buf_reg);
 
-        // //do caching
+        //do caching
         
         // if (client->is_server && !client->out_of_memory) {
         //     if (client->message_len + r< MAX_SIZE) {
@@ -1028,13 +1030,9 @@ signal(SIGBUS, signal_handler);
         // }
         
         // //r = SSL_write(server->ssl, buf, r);
-        // if (r1 == 0) r = SSL_write(server->ssl, buf, r);
-        // else r = SSL_write(server->ssl, new_buf, r);
-        printf("write start %d\n", r);
-        //printf("buffer content\n %s\n", buf);
-        //printf("the errno is %d\n", errno);
-        //printf("SSL_get_error is %d\n", SSL_get_error(client->ssl,r));
-        r = SSL_write(server->ssl, buf, r);
+        if (r1 == 0) r = SSL_write(server->ssl, buf, r);
+        else r = SSL_write(server->ssl, new_buf, r);
+        //r = SSL_write(server->ssl, buf, r);
         //printf("SSL_get_error is %d\n", SSL_get_error(server->ssl,r2));
         printf("write successfuly\n");
         if (r <= 0){
@@ -1167,8 +1165,13 @@ int serve_https_resource(struct client_info **client_list,
         char buf[10000];
         char new_buf[10000];
         char *ac_en;
-        
-        int r = SSL_read(client->ssl,buf,sizeof(buf));
+        //set SSL_read timeout
+        int flags;
+        flags = fcntl(client->socket, F_GETFL, 0);
+        struct timeval timeout={5,0};//5s
+        setsockopt(client->socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout,sizeof(timeout));
+        r = SSL_read(client->ssl, buf, sizeof(buf));
+        fcntl(client->socket, F_SETFL, flags);
 
         if (r < 1) {
             drop_client(client_list, client);
