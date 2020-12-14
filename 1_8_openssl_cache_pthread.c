@@ -66,9 +66,77 @@ struct client_info {
     char *message;
     bool out_of_memory;
     
-    int packet_pos[100];
+    int packet_pos[20000];
     int cur_pkt_num;
 };
+
+/*store content for different url and port*/
+typedef struct Input
+{
+	char url[1024];
+    int port;
+	char *object;
+	int maxAge;
+    long now;
+    int length;
+    
+    char host[1024];
+    int packet_pos[20000];
+    int cur_pkt_num;
+
+} Input;
+
+/*treat input as node in linkedlist*/
+typedef struct QNode
+{
+    struct QNode *prev, *next;
+    Input* input;  
+} QNode;
+
+/*FIFO*/
+typedef struct Queue
+{
+    unsigned count;  
+    unsigned numberOfFrames; 
+    QNode *front, *rear;
+} Queue;
+
+/*make handle element in queue easier*/
+typedef struct Hash
+{
+    int capacity; 
+    QNode* *array;
+} Hash;
+
+/////////////////////pthread////////////////////////////
+pthread_mutex_t mutex;
+
+//==============================================
+typedef struct thrArgs
+{
+    struct client_info **client_list;
+    struct client_info *client;
+    const char *path;
+    Queue* queue;
+    Hash* hash;
+    int ret;
+}Param;
+
+typedef struct gfcArgs
+{
+    struct client_info **client_list;
+    struct client_info *client;
+    struct client_info *server;
+    Queue* queue;
+    Hash* hash;
+    int ret;
+}gfcParam;
+
+typedef struct dwcArgs {
+    fd_set reads;
+
+} dwcParam;
+/////////////////////pthread////////////////////////////
 
 void send_400(struct client_info **client_list,struct client_info *client);
 void send_404(struct client_info **client_list,struct client_info *client);
@@ -117,44 +185,6 @@ SOCKET create_socket(const char* host, const char *port) {
 
     return socket_listen;
 }
-
-/*store content for different url and port*/
-typedef struct Input
-{
-	char url[1024];
-    int port;
-	char *object;
-	int maxAge;
-    long now;
-    int length;
-    
-    char host[1024];
-    int packet_pos[100];
-    int cur_pkt_num;
-
-} Input;
-
-/*treat input as node in linkedlist*/
-typedef struct QNode
-{
-    struct QNode *prev, *next;
-    Input* input;  
-} QNode;
-
-/*FIFO*/
-typedef struct Queue
-{
-    unsigned count;  
-    unsigned numberOfFrames; 
-    QNode *front, *rear;
-} Queue;
-
-/*make handle element in queue easier*/
-typedef struct Hash
-{
-    int capacity; 
-    QNode* *array;
-} Hash;
 
 Input* createInput(char* url, char* host, int port, char* object, int maxAge, long now, int length, int cur_pkt_num, int packet_pos[])
 {
@@ -1003,8 +1033,17 @@ int combined_message(struct client_info **client_list,struct client_info *client
 }
 
 /*https communication*/
-int proxy_https_get_from_client(struct client_info **client_list,struct client_info *client, 
-        struct client_info *server, Hash *hash, Queue *q){
+void proxy_https_get_from_client(void* argv){
+
+       //===================
+    gfcParam* para = (gfcParam *)argv;
+
+    struct client_info **client_list = para->client_list;
+    struct client_info *client = para->client;
+    struct client_info *server = para->server;
+    Hash* hash = para->hash;
+    Queue* q = para->queue;
+    //===================
 
     printf("start transfer https data\n");
     int client_fd, server_fd, r, r1;
@@ -1051,10 +1090,11 @@ int proxy_https_get_from_client(struct client_info **client_list,struct client_i
         drop_client(client_list, client);
         printf("drop server\n");
         drop_client(client_list, server);
-        return server == client->next ? 0 : -1;
+        para->ret = server == client->next ? 0 : -1;
+        return ;
     } else {
         printf("+++++++++++++++++++++++++++++++++++++Debug Begin++++++11111111111++++++++++++++++++++++++++++++++++\n");
-        printf("read from server\n%s\n", buf);
+        //printf("read from server\n%s\n", buf);
         // if (client->is_server) printf("1\n");
         // if (client->encoding == connection) printf("2\n");
         // if (!client->out_of_memory) printf("3\n");
@@ -1119,7 +1159,7 @@ int proxy_https_get_from_client(struct client_info **client_list,struct client_i
                 client->cur_pkt_num++;
             }else {printf("combined fail\n");}
         } else if (!client->is_server){//client's request
-            printf("read from client %d\n%s\n", client->socket, buf);
+            //printf("read from client %d\n%s\n", client->socket, buf);
             char* url_start = strstr(buf, "GET ");
             char* url_end = strstr(buf, "HTTP/1.1");
             char request_host[1024];
@@ -1146,10 +1186,12 @@ int proxy_https_get_from_client(struct client_info **client_list,struct client_i
                                 for(int i = 0; i < input->cur_pkt_num; i++) {
                                     r = SSL_write(client->ssl, input->object + index, input->packet_pos[i]);
                                      if (r <= 0){
+                                        printf("i = %d, cur_pkt_num = %d", i, input->cur_pkt_num);
                                         printf("client close cache socket\n");
                                         drop_client(client_list, client);
                                         drop_client(client_list, server);
-                                        return server == client->next ? 0 : -1;
+                                        para->ret = server == client->next ? 0 : -1;
+                                        return;
                                     }
 
                                     index += input->packet_pos[i];
@@ -1165,7 +1207,7 @@ int proxy_https_get_from_client(struct client_info **client_list,struct client_i
                                 memset(client->request_url, 0, sizeof(client->request_url));
                                 memset(server->packet_pos, 0, sizeof(server->packet_pos));
                                 free(temp);
-                                return 1;
+                                return ;
 
                             }                              
                         }
@@ -1245,16 +1287,25 @@ int proxy_https_get_from_client(struct client_info **client_list,struct client_i
             printf("server close socket\n");
             drop_client(client_list, client);
             drop_client(client_list, server);
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return;
         }
 
     }       
-    return 1;
 }
 
 /*serve http request*/
-int serve_https_resource(struct client_info **client_list,
-        struct client_info *client, const char *path, Hash *hash, Queue *q) {
+void serve_https_resource(void* argv) {
+
+    //===================
+    Param* para = (Param *)argv;
+
+    struct client_info **client_list = para->client_list;
+    struct client_info *client = para->client;
+    const char *path = para->path;
+    Hash* hash = para->hash;
+    Queue* q = para->queue;
+    //===================
 
     printf("serve_resource %s %s fd is %d\n", get_client_address(client), path, client->socket);
     
@@ -1267,7 +1318,7 @@ int serve_https_resource(struct client_info **client_list,
 
     if (strlen(path) > 100) {
         send_400(client_list, client);
-        return -1;
+        return;
     }
     if ( sscanf( path, "%[^:]:%d", host, &portno ) == 2 )
         port = (unsigned short) portno;
@@ -1275,7 +1326,7 @@ int serve_https_resource(struct client_info **client_list,
         port = 443;
     else {
         send_400(client_list, client);
-        return -1;
+        return;
     }
     //get socket connected to server
     sockfd = open_client_socket( client_list, client, host, port );
@@ -1298,7 +1349,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, client);
             drop_client(client_list, server);
             fprintf(stderr, "SSL_new() failed.\n");
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return ;
         }
 
         if (!SSL_set_tlsext_host_name(ssl, host)) {
@@ -1306,7 +1358,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, server);
             fprintf(stderr, "SSL_set_tlsext_host_name() failed.\n");
             ERR_print_errors_fp(stderr);
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return ;
         }
 
         SSL_set_fd(ssl, sockfd);
@@ -1316,7 +1369,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, server);
             fprintf(stderr, "SSL_connect() failed.\n");
             ERR_print_errors_fp(stderr);
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return ;
         }
         //printf("ret is %d, %d,%d, %d\n", ret, SSL_get_error(ssl, ret), SSL_get_fd(ssl), sockfd);
         
@@ -1329,7 +1383,7 @@ int serve_https_resource(struct client_info **client_list,
         client->ctx = SSL_CTX_new(TLS_server_method());
         if (!client->ctx) {
             fprintf(stderr, "SSL_CTX_new() failed.\n");
-            return -1;
+            return ;
         }
 
         get_new_certificate(server->ssl, client->ctx);
@@ -1337,9 +1391,9 @@ int serve_https_resource(struct client_info **client_list,
         const char *connection_established = "HTTP/1.0 200 Connection established\r\n\r\n";
         /* Return SSL-proxy greeting header. */
         r = send(client->socket, connection_established, strlen(connection_established), 0);
-        if(r <= 0) return -1;
+        if(r <= 0) return ;
         r = send(client->socket, "\0", 1, 0);
-        if(r <= 0) return -1;
+        if(r <= 0) return ;
         printf("send feedback to client successfully\n");
         
         client->ssl = SSL_new(client->ctx);
@@ -1347,7 +1401,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, client);
             drop_client(client_list, server);
             fprintf(stderr, "SSL_new() failed.\n");
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return ;
         }
 
         SSL_set_fd(client->ssl, client->socket);
@@ -1357,7 +1412,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, server);
             printf("SSL accept fail\n");
             ERR_print_errors_fp(stderr); 
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return ;
         } else {
             printf("New connection from %s.\n",
                     get_client_address(client));
@@ -1384,7 +1440,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, server);
             printf("Unexpected disconnect from %s.\n",
                     get_client_address(client));
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return ;
         }else {     
             printf("remove acept-encoding:\n");
             ac_en = strstr(buf, "Accept-Encoding: ");
@@ -1407,7 +1464,7 @@ int serve_https_resource(struct client_info **client_list,
 */
             }
             printf("+++++++++++++++++++++++++++++++++++++Debug Begin+++++++++++++22222222222+++++++++++++++++++++++++++\n");
-            printf("read from client %d\n%s\n", client->socket, buf);
+            //printf("read from client %d\n%s\n", client->socket, buf);
             char* url_start = strstr(new_buf, "GET ");
             char* url_end = strstr(new_buf, "HTTP/1.1");
             char request_host[1024];
@@ -1436,7 +1493,8 @@ int serve_https_resource(struct client_info **client_list,
                                         printf("client close cache socket\n");
                                         drop_client(client_list, client);
                                         drop_client(client_list, server);
-                                        return server == client->next ? 0 : -1;
+                                        para->ret = server == client->next ? 0 : -1;
+                                        return;
                                     }
 
                                     index += input->packet_pos[i];
@@ -1444,7 +1502,7 @@ int serve_https_resource(struct client_info **client_list,
                                 memset(client->request_host, 0, sizeof(client->request_host));
                                 memset(client->request_url, 0, sizeof(client->request_url));
                                 printf("HTTPs get from cache successfully!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-                                return 1;
+                                return ;
                             }                              
                         }
         
@@ -1466,7 +1524,8 @@ int serve_https_resource(struct client_info **client_list,
             drop_client(client_list, server);
             printf("Unexpected disconnect from server %s.\n",
                     host);
-            return server == client->next ? 0 : -1;
+            para->ret = server == client->next ? 0 : -1;
+            return;
         }
 
        //proxy_https_get_from_client( client_list, client, server);
@@ -1475,9 +1534,10 @@ int serve_https_resource(struct client_info **client_list,
         drop_client(client_list, client);
         drop_client(client_list, server);
         printf("drop client and server\n");
-        return server == client->next ? 0 : -1;
+        para->ret = server == client->next ? 0 : -1;
+        return;
     }
-    return 1;
+    return;
 }
 
 void send_400(struct client_info **client_list,
@@ -1526,31 +1586,19 @@ void send_503(struct client_info **client_list,
     drop_client(client_list, client);
 }
 
+SOCKET server;
+struct client_info *client_list;
+Hash *hash;
+Queue *queue;
+Hash *https_hash;
+Queue *https_queue;
 
-int main() {
 
-    signal(SIGPIPE, SIG_IGN);
-    SOCKET server = create_socket(0, "8080");
+void dealWithClient(void* args){
 
-    struct client_info *client_list = 0;
-
-    Hash *hash = createHash(100);
-    Queue *queue = createQueue(100);
-    Hash *https_hash = createHash(100);
-    Queue *https_queue = createQueue(100);
-
-    /*===============================SSL===========================================*/
-
-    SSL_library_init();
-    OpenSSL_add_all_algorithms();
-    SSL_load_error_strings();
-
-    
-    /*==========================================================================*/
-
-    while(1) {
-
-        fd_set reads;
+        dwcParam *para = (dwcParam*)args;
+	    fd_set reads = para->reads;
+        
         printf("new select\n");
         reads = wait_on_clients(&client_list, server);
 
@@ -1564,7 +1612,7 @@ int main() {
             if (!ISVALIDSOCKET(client->socket)) {
                 fprintf(stderr, "accept() failed. (%d)\n",
                         GETSOCKETERRNO());
-                return 1;
+                return ;
             }
 
             printf("======================================================================================\n");
@@ -1628,13 +1676,29 @@ int main() {
                                     client->is_https = true;
 
 
-                                    int ret = serve_https_resource(&client_list, client, path, https_hash, https_queue);
-                                    if (ret < 1) {
-                                        if (ret == 0) {
-                                            client = next->next;
-                                            continue;
-                                        }
+                                    //==========================
+
+                                    pthread_t thread;
+                                    Param *para = (Param*)malloc(sizeof(Param)); // warp param into a sturct
+                                    para->client_list = &client_list;
+                                    para->client = client;
+                                    para->path = path;
+                                    para->ret = 1;
+                                    para->queue = https_queue;
+                                    para->hash = https_hash;
+                                    pthread_create(&thread,NULL,(void *)serve_https_resource,(void *)para); // create a thread
+                                    pthread_join(thread,NULL);
+                                    if (para->ret == 0) {
+                                        client = next->next;
+                                        
+                                        free(para);
+                                        para = NULL;
+                                        continue;   
                                     }
+                                    free(para);
+                                    para = NULL;
+                                    //==========================   
+
 
                                 }
                             }
@@ -1645,15 +1709,28 @@ int main() {
                 if(client->is_https) {
                     //client is actual server
                     printf("get data from server %d, %s, client is %d\n", client->socket, client->path, client->server_socket);
-                    int ret = proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket), https_hash ,https_queue);
-                    if(ret < 1) {
+                     //==========================
+                    pthread_t thread;
+                    gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+                    para->client_list = &client_list;
+                    para->client = client;
+                    para->server = get_client(&client_list, client->server_socket);
+                    para->ret = 1;
+                    para->queue = https_queue;
+                    para->hash = https_hash;
+                    pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
+                    pthread_join(thread,NULL);
+                    if(para->ret == 0) {
                         printf("1now the client is %d\n", client->socket);
-                        if (ret == 0) {
-                            client = next->next;
-                            continue;
-                        }
-
+                        client = next->next;
+                        
+                        free(para);
+                        para = NULL;
+                        continue;
                     } 
+                    free(para);
+                    para = NULL;
+                    //==========================
                 } else{
 
                 }
@@ -1661,14 +1738,28 @@ int main() {
             }else if (FD_ISSET(client->socket, &reads) && !client->is_server && client->server_socket) {//send data to server
                 if (client->is_https) {
                     printf("get data from client %d\n", client->socket);
-                    int ret = proxy_https_get_from_client( &client_list, client, get_client(&client_list, client->server_socket), https_hash ,https_queue);
-                    if(ret < 1) {
-                        printf("2now the client is %d\n", client->socket);
-                        if (ret == 0) {
-                            client = next->next;
-                            continue;
-                        }
+                     //==========================
+                    pthread_t thread;
+                    gfcParam *para = (gfcParam*)malloc(sizeof(gfcParam)); // warp param into a sturct
+                    para->client_list = &client_list;
+                    para->client = client;
+                    para->server = get_client(&client_list, client->server_socket);
+                    para->ret = 1;
+                    para->queue = https_queue;
+                    para->hash = https_hash;
+                    pthread_create(&thread,NULL,(void *)proxy_https_get_from_client,(void *)para); // create a thread
+                    pthread_join(thread,NULL);
+                    if(para->ret == 0) {
+                        printf("1now the client is %d\n", client->socket);
+                        client = next->next;
+                        
+                        free(para);
+                        para = NULL;
+                        continue;
                     } 
+                    free(para);
+                    para = NULL;
+                    //==========================
                 } else{
 
                 }
@@ -1679,6 +1770,45 @@ int main() {
 
     } //while(1)
 
+int main(int argc, char **argv) {
+    signal(SIGPIPE, SIG_IGN);
+
+    pthread_t tid;
+    pthread_mutex_init(&mutex,NULL);
+
+    server = create_socket(0, argv[1]);
+
+    client_list = 0;
+
+    hash = createHash(100);
+    queue = createQueue(100);
+    https_hash = createHash(100);
+    https_queue = createQueue(100);
+
+    /*===============================SSL===========================================*/
+
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+    SSL_load_error_strings();
+
+    
+    /*==========================================================================*/
+
+    dwcParam *para= (dwcParam*)malloc(sizeof(dwcParam));
+
+    while(1) {
+        //pthread_t thread;
+        fd_set reads;
+        reads = wait_on_clients(&client_list, server);
+        para->reads = reads;
+
+        pthread_create(&tid,NULL,(void*)dealWithClient,(void*)para);
+        pthread_join(tid,NULL);
+        //dealWithClient((void*)para);
+
+
+    } //while(1)
+
 
     printf("\nClosing socket...\n");
     CLOSESOCKET(server);
@@ -1686,3 +1816,4 @@ int main() {
     printf("Finished.\n");
     return 0;
 }
+
