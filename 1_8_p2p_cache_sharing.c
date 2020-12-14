@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -38,7 +40,9 @@
 #define MAX_REQUEST_SIZE 2047
 #define MAX_SIZE 1024 * 1024 * 10
 #define BSIZE 1024
-
+int serverPort;
+int peersPort[1]={9022};// the number and the port of peers(manually set)
+char requestaddr[256]={'\0'};
 struct client_info {
     socklen_t address_length;
     struct sockaddr_storage address;
@@ -70,6 +74,15 @@ void send_503(struct client_info **client_list,struct client_info *client);
 pthread_mutex_t mutex;
 
 //==============================================
+
+
+
+struct P2P_shared_cache{
+    char address[256];
+    int port;
+};
+struct P2P_shared_cache P2P_shared_cache[100];
+
 typedef struct thrArgs
 {
     struct client_info **client_list;
@@ -77,6 +90,7 @@ typedef struct thrArgs
     const char *path;
     int ret;
 }Param;
+
 
 typedef struct gfcArgs
 {
@@ -110,8 +124,8 @@ SOCKET create_socket(const char* host, const char *port) {
             bind_address->ai_socktype, bind_address->ai_protocol);
     
     int optval = 1;
-    setsockopt(socket_listen, SOL_SOCKET, SO_REUSEADDR, 
-	     (const void *)&optval , sizeof(int));
+    setsockopt(socket_listen, SOL_SOCKET, SO_REUSEADDR,
+         (const void *)&optval , sizeof(int));
 
     if (!ISVALIDSOCKET(socket_listen)) {
         fprintf(stderr, "socket() failed. (%d)\n", GETSOCKETERRNO());
@@ -138,10 +152,10 @@ SOCKET create_socket(const char* host, const char *port) {
 /*store content for different url and port*/
 typedef struct Input
 {
-	char url[256];
+    char url[256];
     int port;
-	char object[MAX_SIZE];
-	int maxAge;
+    char object[MAX_SIZE];
+    int maxAge;
     long now;
     int length;
 } Input;
@@ -150,24 +164,257 @@ typedef struct Input
 typedef struct QNode
 {
     struct QNode *prev, *next;
-    Input* input;  
+    Input* input;
 } QNode;
 
 /*FIFO*/
 typedef struct Queue
 {
-    unsigned count;  
-    unsigned numberOfFrames; 
+    unsigned count;
+    unsigned numberOfFrames;
     QNode *front, *rear;
 } Queue;
 
 /*make handle element in queue easier*/
 typedef struct Hash
 {
-    int capacity; 
+    int capacity;
     QNode* *array;
 } Hash;
+//*********************chao
+struct p2pheader{
+    char type;
+    char address[256];
+    char data;
 
+    
+};
+struct Rec_P2P_shared_cache{
+    char type;
+    char address[256];
+    char port[4];
+};
+
+
+char* itoa(int num,char *str){
+    int i = 0;
+    if(num<0)
+    {
+        num = -num;
+        str[i++] = '-';
+    }
+    do
+    {
+        str[i++] = num%10+48;
+        num /= 10;
+    }while(num);
+    
+    str[i] = '\0';
+    
+    int j = 0;
+    if(str[0]=='-')
+    {
+        j = 1;
+        ++i;
+    }
+    for(;j<i/2;j++)
+    {
+
+        str[j] = str[j] + str[i-1-j];
+        str[i-1-j] = str[j] - str[i-1-j];
+        str[j] = str[j] - str[i-1-j];
+    }
+    
+    return str;
+}
+
+int check_p2p_request(char *buffer,Hash *hash,int fd){
+    struct p2pheader p2pheader;
+    struct Rec_P2P_shared_cache Rec_P2P_shared_cache;
+    char sendingdata[1024];
+    memcpy(&p2pheader, buffer, 257);
+    memcpy(&Rec_P2P_shared_cache, buffer, 261);
+    if(p2pheader.type=='1'){//是一个p2p请求
+        for(int i=0;i<100;i++){
+            if((memcmp(p2pheader.address, hash->array[i]->input->url, 50)==0)){//是否匹配
+                send(fd, hash->array[i]->input->object, MAX_SIZE, 0);
+                close(fd);
+                printf("p2p request :  data from cache\n");
+                return 0;
+            }
+        }
+        sendingdata[0]='0';
+        send(fd, sendingdata, 1, 0);
+        printf("p2p request fails\n");
+        return 0;
+    }
+    else if(p2pheader.type=='2'){
+        sendingdata[0]='0';
+        send(fd, sendingdata, 1, 0);
+        printf("allow new request for balancing\n");
+        return 0;
+    }
+    else if(p2pheader.type=='3'){
+        int isexist=0;
+        for(int i=0;i<100;i++){
+            if(memcmp(p2pheader.address, P2P_shared_cache[i].address, 256)==0){//是否匹配
+                isexist=1;
+                break;
+            }
+        }
+        if(isexist==0){
+            for(int i=0;i<100;i++){
+                if(P2P_shared_cache[i].address[0]=='\0'){//是否匹配
+                    memcpy(P2P_shared_cache[i].address, p2pheader.address, strlen(p2pheader.address));
+//                    memcpy(P2P_shared_cache[i].address+strlen(p2pheader.address), "/", 1);
+                    P2P_shared_cache[i].port=atoi(Rec_P2P_shared_cache.port);
+                    printf("p2p_shared_cache is filled....\n");
+                    break;
+                }
+            }
+        }
+        return 0;
+    }
+    
+    return 1;
+}
+
+int sending_p2p_request(char *requestaddr, char fd, int port, struct P2P_shared_cache *P2P_shared_cache){
+    char temprequestaddr[256];
+    memset(temprequestaddr, '\0', 256);
+    memcpy(temprequestaddr, requestaddr, strlen(requestaddr));
+  //  memcpy(temprequestaddr+strlen(requestaddr), "/", 1);
+    int seq=0;
+    int check_p2pcache_exist=0;
+    for(int i=0;i<100;i++){
+        if(memcmp(temprequestaddr, P2P_shared_cache[i].address, 256)==0){
+            check_p2pcache_exist=1;
+            seq=i;
+            break;
+        }
+    }
+    if(check_p2pcache_exist==1){
+            struct p2pheader p2pheader;
+            p2pheader.type='1';//1 for cache sharing
+            memset(p2pheader.address, '\0', 50);
+            memcpy(p2pheader.address, requestaddr,strlen(requestaddr));
+         //   memcpy(p2pheader.address+strlen(requestaddr), "/",1);
+            char sendingdata[51];
+            int sockfd,n;
+            struct hostent *destination;
+            struct sockaddr_in connection;
+            char addr[]="127.0.0.1";//改成目标地址
+            char buffer[1024*200];
+            if((destination=gethostbyname(addr))==NULL)
+                {
+                    printf("gethostbyname() error\n");
+                    exit(1);
+                }
+                
+                if((sockfd=socket(AF_INET,SOCK_STREAM, 0))==-1)
+                {
+                    printf("socket() error\n");
+                    exit(1);
+                }
+                
+                bzero(&connection,sizeof(connection));
+                connection.sin_family = AF_INET;
+                connection.sin_port = htons(P2P_shared_cache[seq].port);
+                connection.sin_addr = *((struct in_addr *)destination->h_addr);
+                if(connect(sockfd, (struct sockaddr *)&connection, sizeof(connection))==-1)
+                {
+                    printf("-->connect to peers error\n");
+                    return -1;
+                }
+            memcpy(sendingdata, &p2pheader, 51);
+            
+            if((n=(int)send(sockfd,sendingdata,51,0))==-1){
+                    printf("send() error\n");
+                    exit(1);
+                }
+//            recv(sockfd,buffer,1,0);
+//            if(buffer[0]=='1'){//p2p的buffer存在
+//                if(port==443){
+//                    char*  buff= "HTTP/1.1 200 Connection established\r\n\r\n";
+//                    write( fd, buff,strlen(buff));
+//                    read( fd, buff, sizeof( buff ));
+//                }
+        while(recv(sockfd,buffer,sizeof(buffer),0)!=0){
+            write(fd, buffer, sizeof(buffer));
+
+        }
+        close(fd);
+        return 0;
+//            }
+//            if(p2pheader.type=='2'){//p2p的buffer存在
+//                char*  buff= "2 127.0.0.1:9021";
+//                send(fd,buff,strlen(buff),0);
+//                printf("load balancing");
+//                return 0;
+//            }
+//            else{
+//                printf("Peers' server is reject the request\n");
+//                return -1;
+//            }
+                
+            
+        }
+    
+    return -1;
+}
+
+void SBS_process(char *sendingdata, int PORT){
+        int sockfd;
+        struct hostent *destination;
+        struct sockaddr_in connection;
+        char addr[]="127.0.0.1";
+        if((destination=gethostbyname(addr))==NULL){
+                printf("gethostbyname() error\n");
+                exit(1);
+            }
+            
+            if((sockfd=socket(AF_INET,SOCK_STREAM, 0))==-1)
+            {
+                printf("socket() error\n");
+                exit(1);
+            }
+            
+            bzero(&connection,sizeof(connection));
+            connection.sin_family = AF_INET;
+            connection.sin_port = htons(PORT);
+            connection.sin_addr = *((struct in_addr *)destination->h_addr);
+            if(connect(sockfd, (struct sockaddr *)&connection, sizeof(connection))==-1){
+                
+                printf("-->connect to peers error\n");
+            }
+        
+        if(((int)send(sockfd,sendingdata,261,0))==-1){
+                printf("send to peer error\n");
+
+            }
+
+    close(sockfd);
+}
+
+void broadcast_new_cacheaddr(char *addr){
+    char shared_addr[256]={'\0'};
+    char sendingdata[261]={'3'};
+    int port=serverPort;
+    char char_port[4];
+    itoa(port, char_port);
+    
+    memcpy(shared_addr, addr, strlen(addr));
+    memcpy(sendingdata+1, shared_addr, 256);
+    memcpy(sendingdata+257, char_port, 4);
+    //udp发送信息
+    for(int i=0;i<1;i++){
+        SBS_process(sendingdata, peersPort[i]);
+        printf("New address broadcast to peer%d, port is %d\n",i,peersPort[i]);
+    }
+}
+
+
+//************************chao
 Input* createInput(char* url, int port, char* object, int maxAge, long now, int length)
 {
   Input* input = (Input *)malloc(sizeof( Input));
@@ -190,7 +437,7 @@ QNode* newQNode( Input* input )
  
 Queue* createQueue( int numberOfFrames )
 {
-    Queue* queue = (Queue *)malloc( sizeof( Queue ) ); 
+    Queue* queue = (Queue *)malloc( sizeof( Queue ) );
     queue->count = 0;
     queue->front = queue->rear = NULL;
     queue->numberOfFrames = numberOfFrames;
@@ -264,7 +511,7 @@ void Enqueue( Queue* queue, Hash* hash, Input* input )
  
     if ( isQueueEmpty( queue ) )
         queue->rear = queue->front = temp;
-    else 
+    else
     {
         queue->front->prev = temp;
         queue->front = temp;
@@ -284,7 +531,7 @@ void Enqueue( Queue* queue, Hash* hash, Input* input )
                 hash->array[i] = temp;
                 break;
             }
-        } 
+        }
     }
     queue->count++;
 }
@@ -308,7 +555,7 @@ void checkIfExpired(Queue* queue, Hash* hash)
                 if(queue->front)
                     queue->front->prev = NULL;
                 free(temp);
-            } 
+            }
             else
             {
                 temp->prev->next = temp->next;
@@ -348,7 +595,7 @@ void put_into_cache( Queue* queue, Hash* hash, Input* input )
     {
         Enqueue( queue, hash, input);
         return;
-    }       
+    }
     else if (reqPage != queue->front)
     {
         reqPage->prev->next = reqPage->next;
@@ -374,7 +621,7 @@ void put_into_cache( Queue* queue, Hash* hash, Input* input )
 }
 
 /*get element out of cache*/
-Input* get_from_cache(Queue* queue, Hash* hash, char* url, int port) 
+Input* get_from_cache(Queue* queue, Hash* hash, char* url, int port)
 {
     Input* input;
     for (int i = 0; i < hash->capacity; i++)
@@ -403,8 +650,8 @@ Input* get_from_cache(Queue* queue, Hash* hash, char* url, int port)
         
                 queue->front = reqPage;
             }
-            break;           
-        }         
+            break;
+        }
     }
     return input;
 }
@@ -524,7 +771,7 @@ void drop_client(struct client_info **client_list,
             }
             //printf("drop finished4\n");
             free(client);
-            printf("fd %d dropped\n", client->socket);  
+            printf("fd %d dropped\n", client->socket);
             //printf("drop finished5\n");
             return;
         }
@@ -572,7 +819,7 @@ fd_set wait_on_clients(struct client_info **client_list, SOCKET server) {
             if (ci->socket > max_socket)
                 max_socket = ci->socket;
         }
-        ci = ci->next;     
+        ci = ci->next;
     }
     //printf("\n");
 
@@ -594,7 +841,7 @@ void get_new_certificate(SSL *server_ssl, SSL_CTX *client_ctx){
     
     X509 *server_X509 = SSL_get_peer_certificate(server_ssl);
     
-    FILE *privkey = fopen("privkey.pem", "r");
+    FILE *privkey = fopen("/Users/losboine/Desktop/privkey.pem", "r");
     RSA *root_rsa = PEM_read_RSAPrivateKey(privkey, NULL, 0, NULL);
     fclose(privkey);
     EVP_PKEY *root_key = EVP_PKEY_new();
@@ -614,9 +861,9 @@ void get_new_certificate(SSL *server_ssl, SSL_CTX *client_ctx){
     ASN1_INTEGER_get_uint64(&pr, X509_get_serialNumber(server_X509));
     ASN1_INTEGER_set(X509_get_serialNumber(client_cert), pr);
     X509_gmtime_adj(X509_get_notBefore(client_cert), 0);
-	X509_gmtime_adj(X509_get_notAfter(client_cert), 31536000L);
+    X509_gmtime_adj(X509_get_notAfter(client_cert), 31536000L);
 
-	X509_set_pubkey(client_cert, server_key);
+    X509_set_pubkey(client_cert, server_key);
     X509_set_subject_name(client_cert,  X509_NAME_dup(X509_get_subject_name(server_X509)));
     
     X509_NAME * issuer = X509_get_issuer_name(client_cert);
@@ -685,13 +932,13 @@ int open_client_socket(struct client_info **client_list,
             FD_ZERO(&set);
             FD_SET(sockfd, &set);
             struct timeval timeout;
-            timeout.tv_sec = 1; 
-            timeout.tv_usec = 0; 
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
             ret = select(sockfd+1, 0, &set, 0, &timeout);
             if (ret == 0 || (ret < 0 && errno != EINTR)) {
                 send_503(client_list,client);
                 return -1;
-            } else if (ret > 0) {               
+            } else if (ret > 0) {
                 optlen = sizeof(int);
                 if(getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (void *)(&optval), &optlen) < 0) {
                     send_503(client_list,client);
@@ -812,7 +1059,7 @@ char* fetch_from_server(struct client_info **client_list,
         sprintf(buf, "GET http://%s%s HTTP/1.1\r\nAccept: */*\r\nHost: %s\r\nConnection: Close\r\nUser-Agent: HighPerformanceHttpProxy\r\n\r\n",host,address,host);
         int ret;
         ret = send(sockfd, buf, strlen(buf), 0);
-        if (ret < 0) 
+        if (ret < 0)
             perror("ERROR writing to socket");
 
         int totalBytes = 0;
@@ -852,6 +1099,7 @@ void serve_http_resource(struct client_info **client_list,
     char host[10000], address[10000];
     char* server_content;
 
+
     if (strcmp(path, "/") == 0) path = "index.html";
 
     if (strlen(path) > 100) {
@@ -884,49 +1132,61 @@ void serve_http_resource(struct client_info **client_list,
     strcat(url, host);
     strcat(url, address);
     if (!checkIfExisted(hash, q, url, port)){
+        strcpy(requestaddr, host);
+        strcat(requestaddr, address);
+        printf("%s\n",requestaddr);
+
+        
         bool exist_max_age = false;
         int length;
         char header[10000],cache_control[10000], max_age[10000];
         //char* content = (char*)malloc(MAX_SIZE * sizeof(char));
         server_content = fetch_from_server(client_list, client, host, address, port, &length);
-        if (server_content) {
-            char* con_index = strstr(server_content, "\r\n\r\n");
-            //memcpy(content, con_index + 4, (int)server_content + length - (int)con_index - 4);
-            memcpy(header, server_content, (int)con_index - (int)server_content);
-
-            //*(content + (int)server_content + length - (int)con_index + 4) = '\0';
-            *(header + (int)con_index - (int)server_content) = '\0';
-          
-            printf("\nheader:\n%s\n", header);
-            char *cache_index_start = strstr(header, "Cache-Control:");
-            if(cache_index_start) {
-                char *cache_index_end = strstr(cache_index_start, "\r\n");
-                if(cache_index_end) {
-                    memcpy(cache_control, cache_index_start + 15, (int)cache_index_end - (int)cache_index_start - 15);
-                    *(cache_control + (int)cache_index_end - (int)cache_index_start - 15) = '\0';
-                }
-                else {
-                    memcpy(cache_control, cache_index_start + 15, strlen(cache_index_start) - 15);
-                    *(cache_control + strlen(cache_index_start) - 15) = '\0';
-                }
-                printf("cache control: %s\n", cache_control);
-                if (sscanf(cache_control, "max-age=%s", max_age) == 1) exist_max_age = true;
-                
-            }
-            send(client->socket, server_content, length, 0);
-            if (length > 10 * 1024 && length < MAX_SIZE){
-                if(!exist_max_age) strcpy(max_age, "3600");
-                printf("max-age is %s\n", max_age);
-                time_t now;
-                Input* input = createInput(url, port, server_content, atoi(max_age), time(&now), length);
-                put_into_cache(q, hash, input);
-                
-            }
-            free(server_content);
-            print_cache(q);
-        } else{return;}
-
         
+        if(sending_p2p_request(requestaddr,client->socket,port,P2P_shared_cache)==0);
+            else{
+                if (server_content) {
+                    char* con_index = strstr(server_content, "\r\n\r\n");
+                    //memcpy(content, con_index + 4, (int)server_content + length - (int)con_index - 4);
+                    memcpy(header, server_content, (int)con_index - (int)server_content);
+
+                    //*(content + (int)server_content + length - (int)con_index + 4) = '\0';
+                    *(header + (int)con_index - (int)server_content) = '\0';
+                  
+                    printf("\nheader:\n%s\n", header);
+                    char *cache_index_start = strstr(header, "Cache-Control:");
+                    if(cache_index_start) {
+                        char *cache_index_end = strstr(cache_index_start, "\r\n");
+                        if(cache_index_end) {
+                            memcpy(cache_control, cache_index_start + 15, (int)cache_index_end - (int)cache_index_start - 15);
+                            *(cache_control + (int)cache_index_end - (int)cache_index_start - 15) = '\0';
+                        }
+                        else {
+                            memcpy(cache_control, cache_index_start + 15, strlen(cache_index_start) - 15);
+                            *(cache_control + strlen(cache_index_start) - 15) = '\0';
+                        }
+                        printf("cache control: %s\n", cache_control);
+                        if (sscanf(cache_control, "max-age=%s", max_age) == 1) exist_max_age = true;
+                        
+                    }
+                    send(client->socket, server_content, length, 0);
+                    if (length > 10  && length < MAX_SIZE){
+                        if(!exist_max_age) strcpy(max_age, "3600");
+                        printf("max-age is %s\n", max_age);
+                        time_t now;
+                        Input* input = createInput(url, port, server_content, atoi(max_age), time(&now), length);
+                        put_into_cache(q, hash, input);
+                        broadcast_new_cacheaddr(requestaddr);
+                        printf("broadcasting....\n");
+                        
+                    }
+                    free(server_content);
+                    print_cache(q);
+                } else{return;}
+
+                
+            }
+       
     }else{
         printf("existed!!!!!\n");
         time_t now;
@@ -1036,7 +1296,7 @@ void proxy_https_get_from_client(void* argv){
         //         if (client->message_len + r > client->cur_size) {//expand
                     
         //             char *temp = (char*)malloc(client->cur_size + 10*1024);
-        //             client->cur_size += 10*1024; 
+        //             client->cur_size += 10*1024;
         //             memcpy(temp, client->message, client->message_len);
         //             memcpy(temp + client->message_len, buf, r);
         //             free(client->message);
@@ -1064,7 +1324,7 @@ void proxy_https_get_from_client(void* argv){
             return;
         }
         printf("data transfer finished\n");
-    }       
+    }
 }
 
 /*serve http request*/
@@ -1104,7 +1364,7 @@ void serve_https_resource(void* argv) {
 
     if (sockfd > 0) {
         client->server_socket = sockfd;
-        //treat server socket as client  
+        //treat server socket as client
         server->socket = sockfd;
         server->is_https = true;
         server->is_server = true;
@@ -1143,7 +1403,7 @@ void serve_https_resource(void* argv) {
         }
         //printf("ret is %d, %d,%d, %d\n", ret, SSL_get_error(ssl, ret), SSL_get_fd(ssl), sockfd);
         
-        //printf("%s\n",ERR_error_string(ERR_get_error(), NULL)); 
+        //printf("%s\n",ERR_error_string(ERR_get_error(), NULL));
 
         printf ("SSL/TLS using %s\n", SSL_get_cipher(ssl));
         /*==================================================================*/
@@ -1187,7 +1447,7 @@ void serve_https_resource(void* argv) {
             drop_client(client_list, client);
             drop_client(client_list, server);
             printf("SSL accept fail\n");
-            ERR_print_errors_fp(stderr); 
+            ERR_print_errors_fp(stderr);
             para->ret = server == client->next ? 0 : -1;
             return;
         } else {
@@ -1204,7 +1464,12 @@ void serve_https_resource(void* argv) {
         char new_buf[10000];
         char *ac_en;
         
-        int r = SSL_read(client->ssl,buf,sizeof(buf));
+        int flags;
+        flags = fcntl(client->socket, F_GETFL, 0);
+        struct timeval timeout={3,0};//5s
+        setsockopt(client->socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout,sizeof(timeout));
+        r = SSL_read(client->ssl, buf, sizeof(buf));
+        fcntl(client->socket, F_SETFL, flags);
 
         if (r < 1) {
             drop_client(client_list, client);
@@ -1213,7 +1478,7 @@ void serve_https_resource(void* argv) {
                     get_client_address(client));
             para->ret = server == client->next ? 0 : -1;
             return;
-        }else {     
+        }else {
             printf("read successfully\n");
             ac_en = strstr(buf, "Accept-Encoding: ");
             if (ac_en) {
@@ -1311,8 +1576,21 @@ Queue *queue;
 
 
 void dealWithClient(void* args){
+    //*********************chao
+
+
+
+
+
+
+
+
+    //************************chao
+    
     dwcParam *para = (dwcParam*)args;
-	fd_set reads = para->reads;
+    
+    fd_set reads = para->reads;
+
  
 
         
@@ -1342,7 +1620,7 @@ void dealWithClient(void* args){
         while(client) {
             struct client_info *next = client->next;
             printf("now the client is %d\n", client->socket);
-            //receive first request 
+            //receive first request
             if (FD_ISSET(client->socket, &reads) && !client->server_socket && !client->is_server) {
 
                 if (MAX_REQUEST_SIZE == client->received) {
@@ -1362,6 +1640,13 @@ void dealWithClient(void* args){
                     drop_client(&client_list, client);
 
                 } else {
+                    //*********************chao
+                int is_p2prequest=check_p2p_request(client->request,hash,client->socket);
+                    
+                if(is_p2prequest==0){
+                    continue;
+                }
+                    //*********************chao
                     client->received += r;
                     client->request[client->received] = 0;
 
@@ -1408,11 +1693,11 @@ void dealWithClient(void* args){
                                         
                                         free(para);
                                         para = NULL;
-                                        continue;   
+                                        continue;
                                     }
                                     free(para);
                                     para = NULL;
-                                    //==========================   
+                                    //==========================
 
                                 }
                             }
@@ -1440,7 +1725,7 @@ void dealWithClient(void* args){
                         free(para);
                         para = NULL;
                         continue;
-                    } 
+                    }
                     free(para);
                     para = NULL;
                     //==========================
@@ -1467,7 +1752,7 @@ void dealWithClient(void* args){
                         free(para);
                         para = NULL;
                         continue;
-                    } 
+                    }
                     free(para);
                     para = NULL;
                     //==========================
@@ -1483,12 +1768,23 @@ void dealWithClient(void* args){
 
 }
 
+
+
 int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
-
     pthread_t tid;
     pthread_mutex_init(&mutex,NULL);
+    
+//    if (argc != 2) {
+//      printf("usage:./filename Selfport Peerport\nfor example: ./Proxy 8080 8081");
+//      exit(1);
+//    }
+    argv[1]="9021";
+    argv[2]="9022";
 
+
+    peersPort[0]=atoi(argv[2]);
+    serverPort= atoi(argv[1]);
     server = create_socket(0, argv[1]);
 
     client_list = 0;
@@ -1527,3 +1823,5 @@ int main(int argc, char **argv) {
     printf("Finished.\n");
     return 0;
 }
+
+
