@@ -35,8 +35,8 @@
 #define SERVER_NAME "high_performance_proxy"
 #define SERVER_URL "wait and see"
 #define BOLD_WORDS "from Hawaii"
-#define target_file "/dams/capital/image/202012/14/5fd6d2ffe4b0da9cd4328dd4.jpg"
-#define fake_file "/Users/chiyuanye/vscode/Final/hhh.jpg"
+//#define target_file "/dams/capital/image/202012/14/5fd6d2ffe4b0da9cd4328dd4.jpg"
+//#define fake_file "/Users/chiyuanye/vscode/Final/hhh.jpg"
 
 #define MAX_REQUEST_SIZE 2047
 #define MAX_SIZE 1024 * 1024 * 10
@@ -1074,8 +1074,8 @@ int combined_message(struct client_info **client_list,struct client_info *client
             client->cur_pkt_num = 0;
             client->cur_size = 0;
             client->message_len = 0;
-            strcpy(get_client(client_list,client->server_socket)->request_url, "");
-            strcpy(get_client(client_list,client->server_socket)->request_host, "");
+            memset(get_client(client_list,client->server_socket)->request_url, 0, sizeof(client->request_url));
+            memset(get_client(client_list,client->server_socket)->request_host, 0, sizeof(client->request_host));
             memset(client->packet_pos, 0, sizeof(client->packet_pos));
             
             return -1;
@@ -1129,36 +1129,36 @@ void proxy_https_get_from_client(void* argv){
             if(client->is_server && !client->out_of_memory && strlen(request_host) && strlen(request_url) && client->message_len) {
                 char* temp = cut_suffix(request_url);
                 if (temp){
-                    char* temp2 = cut_suffix(target_file);
-                    if (temp2 && strcmp(temp, temp2) == 0) {
-                        //read fake file
-                        FILE *fp;
-                        if((fp = fopen(fake_file,"r")) == NULL)
-                        {
-                            perror("fail to read");
-                            exit (1) ;
-                        }
-                        int fileLight = 0;
-                        char *pBuf; 
-                        fseek(fp,0,SEEK_END); 
-                        fileLight = ftell(fp);    
-                        pBuf =(char *)malloc(fileLight * sizeof(char));
-                        rewind(fp);                
-                        fread(pBuf,1,fileLight,fp); 
-                        pBuf[fileLight]=0;            
-                        fclose(fp);
-                        printf("file length is %d\n", fileLight);
+                    // char* temp2 = cut_suffix(target_file);
+                    // if (temp2 && strcmp(temp, temp2) == 0) {
+                    //     //read fake file
+                    //     FILE *fp;
+                    //     if((fp = fopen(fake_file,"r")) == NULL)
+                    //     {
+                    //         perror("fail to read");
+                    //         exit (1) ;
+                    //     }
+                    //     int fileLight = 0;
+                    //     char *pBuf; 
+                    //     fseek(fp,0,SEEK_END); 
+                    //     fileLight = ftell(fp);    
+                    //     pBuf =(char *)malloc(fileLight * sizeof(char));
+                    //     rewind(fp);                
+                    //     fread(pBuf,1,fileLight,fp); 
+                    //     pBuf[fileLight]=0;            
+                    //     fclose(fp);
+                    //     printf("file length is %d\n", fileLight);
 
-                        memcpy(client->packet_pos, &fileLight, sizeof(int));
-                        Input *input = createInput(temp, request_host, 443, pBuf, 3600, time(&now), fileLight, 1, client->packet_pos);
-                        put_into_cache(q, hash, input);
-                        print_cache(q);
+                    //     memcpy(client->packet_pos, &fileLight, sizeof(int));
+                    //     Input *input = createInput(temp, request_host, 443, pBuf, 3600, time(&now), fileLight, 1, client->packet_pos);
+                    //     put_into_cache(q, hash, input);
+                    //     print_cache(q);
  
-                    } else {
-                        Input *input = createInput(temp, request_host, 443, client->message, 3600, time(&now), client->message_len, client->cur_pkt_num, client->packet_pos);
-                        put_into_cache(q, hash, input);
-                        print_cache(q);
-                    }
+                    // } else {
+                    Input *input = createInput(temp, request_host, 443, client->message, 3600, time(&now), client->message_len, client->cur_pkt_num, client->packet_pos);
+                    put_into_cache(q, hash, input);
+                    print_cache(q);
+                    //}
                     
                     free(temp);
                 }
@@ -1173,7 +1173,7 @@ void proxy_https_get_from_client(void* argv){
         drop_client(client_list, server);
         para->ret = server == client->next ? 0 : -1;
         return ;
-    } else {
+    } else { //r > 0
         printf("+++++++++++++++++++++++++++++++++++++Debug Begin++++++11111111111++++++++++++++++++++++++++++++++++\n");
         //printf("read from server\n%s\n", buf);
         // if (client->is_server) printf("1\n");
@@ -1206,8 +1206,8 @@ void proxy_https_get_from_client(void* argv){
                     client->cur_pkt_num = 0;
                     client->cur_size = 0;
                     client->message_len = 0;
-                    strcpy(get_client(client_list,client->server_socket)->request_url, "");
-                    strcpy(get_client(client_list,client->server_socket)->request_host, "");
+                    memset(get_client(client_list,client->server_socket)->request_url, 0, sizeof(client->request_url));
+                    memset(get_client(client_list,client->server_socket)->request_host, 0, sizeof(client->request_host));
                     memset(client->packet_pos, 0, sizeof(client->packet_pos));
                 } else {
                     if(combined_message(client_list,client, buf, r) > 0){
