@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -34,6 +35,8 @@
 #define SERVER_NAME "high_performance_proxy"
 #define SERVER_URL "wait and see"
 #define BOLD_WORDS "from Hawaii"
+#define target_file "/dams/capital/image/202012/14/5fd6d2ffe4b0da9cd4328dd4.jpg"
+#define fake_file "/Users/chiyuanye/vscode/Final/hhh.jpg"
 
 #define MAX_REQUEST_SIZE 2047
 #define MAX_SIZE 1024 * 1024 * 10
@@ -565,7 +568,6 @@ void drop_client(struct client_info **client_list,
     //exit(1);
 }
 
-
 const char *get_client_address(struct client_info *ci) {
     getnameinfo((struct sockaddr*)&ci->address,
             ci->address_length,
@@ -729,7 +731,7 @@ int ssl_handshake(struct client_info *client){
         // The peer has notified us that it is shutting down via
         // the SSL "close_notify" message so we need to
         // shutdown, too.
-        printf("Peer closed connection during SSL handshake,status:%d", status);
+        printf("Peer closed connection during SSL handshake,status:%d errno:%s\n", status, strerror(errno));
         status = -1;
         break;
         default:
@@ -891,7 +893,7 @@ void serve_http_resource(struct client_info **client_list,
                 if(!exist_max_age) strcpy(max_age, "3600");
                 printf("max-age is %s\n", max_age);
                 time_t now;
-                int temp[100];//modify
+                int temp[20000];//modify
                 Input* input = createInput(url, "", port, server_content, atoi(max_age), time(&now), length, 0, temp);
                 put_into_cache(q, hash, input);
                 
@@ -915,58 +917,109 @@ void showFields(X509 *cert){
     char *subj = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
     char *issuer = X509_NAME_oneline(X509_get_issuer_name(cert), NULL, 0);
     fprintf(stderr, "CERTIFICATE:\n%s\n%s\n", subj, issuer);
+    
 }
 /*get new SSL certificate*/
 void get_new_certificate(SSL *server_ssl, SSL_CTX *client_ctx){
     printf("make new certificate......\n");
     
     X509 *server_X509 = SSL_get_peer_certificate(server_ssl);
-    
-    FILE *privkey = fopen("privkey.pem", "r");
-    RSA *root_rsa = PEM_read_RSAPrivateKey(privkey, NULL, 0, NULL);
-    fclose(privkey);
-    EVP_PKEY *root_key = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(root_key, root_rsa);//root CA private key
 
-    RSA *server_rsa;
     BIGNUM *e;
     e = BN_new();
-    BN_set_word(e, RSA_F4);
-    server_rsa = RSA_new();
-    RSA_generate_key_ex(server_rsa, 2048, e, NULL);
-    EVP_PKEY *server_key = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(server_key, server_rsa);//server prrivate key
+    ASN1_INTEGER_to_BN(X509_get_serialNumber(server_X509), e);
+    char *serial_num_str = BN_bn2hex(e);
     
-    X509 *client_cert = X509_new();
-    uint64_t pr;
-    ASN1_INTEGER_get_uint64(&pr, X509_get_serialNumber(server_X509));
-    ASN1_INTEGER_set(X509_get_serialNumber(client_cert), pr+1);
-    X509_gmtime_adj(X509_get_notBefore(client_cert), 0);
-	X509_gmtime_adj(X509_get_notAfter(client_cert), 31536000L);
+    char crt_address[2048] = "./cert/";
+    char key_address[2048] = "./cert/";
+    strcat(crt_address, serial_num_str); strcat(crt_address, "_crt");
+    strcat(key_address, serial_num_str); strcat(key_address, "_key");
+    printf("cer_address is %s\n", crt_address);
+    printf("key_address is %s\n", key_address);
+    printf("serial number is %s\n", serial_num_str);
 
-	X509_set_pubkey(client_cert, server_key);
-    X509_set_subject_name(client_cert,  X509_NAME_dup(X509_get_subject_name(server_X509)));
+    if (access(crt_address, R_OK) != -1 && access(key_address, R_OK) != -1){
+        printf("find the exist cert!!\n");
+        FILE *privkey = fopen(key_address, "r");
+        FILE *cert = fopen(crt_address, "r");
+        
+        RSA *server_rsa = PEM_read_RSAPrivateKey(privkey, NULL, 0, NULL);
+        fclose(privkey);
+
+        X509 *client_cert = PEM_read_X509(cert, NULL, 0, NULL);
+        fclose(cert);
+
+        EVP_PKEY *server_key = EVP_PKEY_new();
+        EVP_PKEY_assign_RSA(server_key, server_rsa);
+
+        SSL_CTX_use_certificate(client_ctx, client_cert);
+        SSL_CTX_use_PrivateKey(client_ctx, server_key);
+    } else {
+        FILE *privkey = fopen("privkey.pem", "r");
+        RSA *root_rsa = PEM_read_RSAPrivateKey(privkey, NULL, 0, NULL);
+        fclose(privkey);
+        EVP_PKEY *root_key = EVP_PKEY_new();
+        EVP_PKEY_assign_RSA(root_key, root_rsa);//root CA private key
+
+        RSA *server_rsa;
+        BIGNUM *e;
+        e = BN_new();
+        BN_set_word(e, RSA_F4);
+        server_rsa = RSA_new();
+        RSA_generate_key_ex(server_rsa, 2048, e, NULL);
+        EVP_PKEY *server_key = EVP_PKEY_new();
+        EVP_PKEY_assign_RSA(server_key, server_rsa);//server prrivate key
+        
+        X509 *client_cert = X509_new();
+        //uint64_t pr;
+        e = BN_new();
+        ASN1_INTEGER_to_BN(X509_get_serialNumber(server_X509), e);
+        //char *serial_ooo = BN_bn2hex(e);
+        BN_to_ASN1_INTEGER(e, X509_get_serialNumber(client_cert));
+        //ASN1_INTEGER_set(X509_get_serialNumber(client_cert), pr+1);
+        X509_gmtime_adj(X509_get_notBefore(client_cert), 0);
+        X509_gmtime_adj(X509_get_notAfter(client_cert), 31536000L);
+
+        X509_set_pubkey(client_cert, server_key);
+        X509_set_subject_name(client_cert,  X509_NAME_dup(X509_get_subject_name(server_X509)));
+        
+        X509_NAME * issuer = X509_get_issuer_name(client_cert);
+        X509_NAME_add_entry_by_txt(issuer, "C",  MBSTRING_ASC, (unsigned char *)"CN", -1, -1, 0);
+        X509_NAME_add_entry_by_txt(issuer, "ST",  MBSTRING_ASC, (unsigned char *)"Beijing", -1, -1, 0);
+        X509_NAME_add_entry_by_txt(issuer, "L",  MBSTRING_ASC, (unsigned char *)"Beijing", -1, -1, 0);
+        X509_NAME_add_entry_by_txt(issuer, "O",  MBSTRING_ASC, (unsigned char *)"High Performance Proxy", -1, -1, 0);
+        X509_NAME_add_entry_by_txt(issuer, "OU",  MBSTRING_ASC, (unsigned char *)"XXX", -1, -1, 0);
+        X509_NAME_add_entry_by_txt(issuer, "CN", MBSTRING_ASC, (unsigned char *)"Comp112", -1, -1, 0);
+
+        //https://stackoverflow.com/questions/15875494/how-to-retrieve-issuer-alternative-name-for-ssl-certificate-by-openssl
+        STACK_OF(GENERAL_NAME) *san_names = NULL;
+        int crit;
+        san_names = X509_get_ext_d2i(server_X509, NID_subject_alt_name, &crit, NULL);
+        X509_add1_ext_i2d(client_cert, NID_subject_alt_name, san_names, crit, X509V3_ADD_REPLACE);
+
+
+        showFields(client_cert);
+
+        X509_sign(client_cert, root_key, EVP_sha256());
+
+        if(access("./cert",0)==-1) {
+            mkdir("./cert",0777);
+        }
+        
+        FILE *out = fopen(crt_address,"w");
+        PEM_write_X509(out, client_cert);
+        fclose(out);
+        out = fopen(key_address,"w");
+        PEM_write_PrivateKey(out, server_key, NULL, NULL, 0, 0, NULL);
+        fclose(out);
+
+        SSL_CTX_use_certificate(client_ctx, client_cert);
+        SSL_CTX_use_PrivateKey(client_ctx, server_key);
+    }
     
-    X509_NAME * issuer = X509_get_issuer_name(client_cert);
-    X509_NAME_add_entry_by_txt(issuer, "C",  MBSTRING_ASC, (unsigned char *)"CN", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(issuer, "ST",  MBSTRING_ASC, (unsigned char *)"Beijing", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(issuer, "L",  MBSTRING_ASC, (unsigned char *)"Beijing", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(issuer, "O",  MBSTRING_ASC, (unsigned char *)"High Performance Proxy", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(issuer, "OU",  MBSTRING_ASC, (unsigned char *)"XXX", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(issuer, "CN", MBSTRING_ASC, (unsigned char *)"Comp112", -1, -1, 0);
-
-    //https://stackoverflow.com/questions/15875494/how-to-retrieve-issuer-alternative-name-for-ssl-certificate-by-openssl
-    STACK_OF(GENERAL_NAME) *san_names = NULL;
-    int crit;
-    san_names = X509_get_ext_d2i(server_X509, NID_subject_alt_name, &crit, NULL);
-    X509_add1_ext_i2d(client_cert, NID_subject_alt_name, san_names, crit, X509V3_ADD_REPLACE);
-
-    showFields(client_cert);
-
-    X509_sign(client_cert, root_key, EVP_sha256());
-
-    SSL_CTX_use_certificate(client_ctx, client_cert);
-    SSL_CTX_use_PrivateKey(client_ctx, server_key);
+    
+    
+ 
 
 
 }
@@ -1035,7 +1088,7 @@ int combined_message(struct client_info **client_list,struct client_info *client
 /*https communication*/
 void proxy_https_get_from_client(void* argv){
 
-       //===================
+    //===================
     gfcParam* para = (gfcParam *)argv;
 
     struct client_info **client_list = para->client_list;
@@ -1076,9 +1129,37 @@ void proxy_https_get_from_client(void* argv){
             if(client->is_server && !client->out_of_memory && strlen(request_host) && strlen(request_url) && client->message_len) {
                 char* temp = cut_suffix(request_url);
                 if (temp){
-                    Input *input = createInput(temp, request_host, 443, client->message, 3600, time(&now), client->message_len, client->cur_pkt_num, client->packet_pos);
-                    put_into_cache(q, hash, input);
-                    print_cache(q);
+                    char* temp2 = cut_suffix(target_file);
+                    if (temp2 && strcmp(temp, temp2) == 0) {
+                        //read fake file
+                        FILE *fp;
+                        if((fp = fopen(fake_file,"r")) == NULL)
+                        {
+                            perror("fail to read");
+                            exit (1) ;
+                        }
+                        int fileLight = 0;
+                        char *pBuf; 
+                        fseek(fp,0,SEEK_END); 
+                        fileLight = ftell(fp);    
+                        pBuf =(char *)malloc(fileLight * sizeof(char));
+                        rewind(fp);                
+                        fread(pBuf,1,fileLight,fp); 
+                        pBuf[fileLight]=0;            
+                        fclose(fp);
+                        printf("file length is %d\n", fileLight);
+
+                        memcpy(client->packet_pos, &fileLight, sizeof(int));
+                        Input *input = createInput(temp, request_host, 443, pBuf, 3600, time(&now), fileLight, 1, client->packet_pos);
+                        put_into_cache(q, hash, input);
+                        print_cache(q);
+ 
+                    } else {
+                        Input *input = createInput(temp, request_host, 443, client->message, 3600, time(&now), client->message_len, client->cur_pkt_num, client->packet_pos);
+                        put_into_cache(q, hash, input);
+                        print_cache(q);
+                    }
+                    
                     free(temp);
                 }
                 
