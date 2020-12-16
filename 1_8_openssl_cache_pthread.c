@@ -538,7 +538,7 @@ void drop_client(struct client_info **client_list,
                 */
                 free(client->message);
             }
-            
+
             if (client->ctx) {
                 SSL_CTX_free(client->ctx);
             }
@@ -547,20 +547,23 @@ void drop_client(struct client_info **client_list,
             
             //printf("drop finished2\n");
             if(client->socket != 0)
-                CLOSESOCKET(client->socket);
+                close(client->socket);
             if (client->ssl){
                 SSL_shutdown(client->ssl);
             }
             //printf("drop finished3\n");
             if (client->ssl){
                 SSL_free(client->ssl);
+
             }
             //printf("drop finished4\n");
             free(client);
-            printf("fd %d dropped\n", client->socket);  
+            client = NULL;
+            //printf("fd %d dropped\n", client->socket);
             //printf("drop finished5\n");
             return;
         }
+
         p = &(*p)->next;
     }
 
@@ -1108,16 +1111,32 @@ void proxy_https_get_from_client(void* argv){
     client_fd = client->socket;
     server_fd = server->socket;
 
-    memset(buf, 0, sizeof(buf));
-    
+
+
     //set SSL_read timeout
     int flags;
     flags = fcntl(client->socket, F_GETFL, 0);
     struct timeval timeout={3,0};//3s
     setsockopt(client->socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout,sizeof(timeout));
-    r = SSL_read(client->ssl, buf, sizeof(buf));
+
+
+    if(client->ssl != 0)
+        r = SSL_read(client->ssl, buf, sizeof(buf));
+    else
+    {
+        printf("drop client  \n");
+        drop_client(client_list, client);
+        printf("drop server\n");
+        drop_client(client_list, server);
+        para->ret = server == client->next ? 0 : -1;
+        return ;
+
+    }
+
     fcntl(client->socket, F_SETFL, flags);
     printf("read successfully\n");
+
+
  
     if (r <= 0){
         printf("server close socket \n");
@@ -1884,6 +1903,7 @@ int main(int argc, char **argv) {
         para->reads = reads;
 
         pthread_create(&tid,NULL,(void*)dealWithClient,(void*)para);
+
         pthread_join(tid,NULL);
         //dealWithClient((void*)para);
 
